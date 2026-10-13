@@ -13,6 +13,9 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         MYCROBO_GATEWAY_PORT: 4177,
+        MYCROBO_AUTH_ROLE: "owner",
+        MYCROBO_TENANT_ID: "tenant-web-live",
+        MYCROBO_AUTH_USER_ID: "user-web-live",
       },
     },
   ],
