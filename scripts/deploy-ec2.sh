@@ -116,6 +116,7 @@ echo "[6/6] Starting MyCrobo Gateway with PM2..."
 sudo systemctl stop pm2-root mycrobo || true
 sudo systemctl disable pm2-root mycrobo || true
 sudo rm -f /etc/systemd/system/pm2-root.service /etc/systemd/system/mycrobo.service || true
+sudo rm -rf /usr/lib/node_modules/pm2/modules/pm2-io-bpm ~/.pm2/modules || true
 sudo systemctl daemon-reload || true
 sudo pm2 kill || true
 pm2 kill || true
@@ -124,9 +125,14 @@ sleep 1
 sudo fuser -k -9 4177/tcp || true
 
 pm2 delete all || true
+pm2 set pm2:pm2-io:metrics false || true
 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup systemd -u "$USER" --hp "$HOME" | tail -n 1 | bash || true
+
+sleep 2
+echo "Verifying local gateway status..."
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4177/api/v1/status || true
 
 echo "=========================================="
 echo "  Deployment Complete!                   "
