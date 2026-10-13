@@ -1697,10 +1697,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     accountId: process.env.MYCROBO_EXPECTED_ACCOUNT_SCOPE_ID,
     buildVersion: process.env.MYCROBO_BUILD_VERSION,
   });
+  const host = process.env.MYCROBO_GATEWAY_HOST || "127.0.0.1";
   const server = createGatewayServer({
     autoSendHostBootstrap: hostBootstrapResult.accepted ? hostBootstrapResult.bootstrap : null,
-  }).listen(port, "127.0.0.1", () => {
-    process.stdout.write(`MyCrobo local gateway: http://127.0.0.1:${port}\n`);
+  }).listen(port, host, () => {
+    process.stdout.write(`MyCrobo local gateway: http://${host}:${port}\n`);
   });
   const desktopParentPID = Number(process.env.MYCROBO_DESKTOP_PARENT_PID || 0);
   closeGatewayWhenParentExits({ server, parentPID: desktopParentPID });
