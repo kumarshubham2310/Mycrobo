@@ -5,6 +5,7 @@ module.exports = {
       cwd: __dirname,
       script: "services/gateway/server.mjs",
       node_args: "--experimental-strip-types",
+      exec_mode: "fork",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -12,7 +13,6 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         MYCROBO_GATEWAY_PORT: 4177,
-        MYCROBO_GATEWAY_HOST: "127.0.0.1",
       },
     },
   ],

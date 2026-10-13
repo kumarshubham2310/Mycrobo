@@ -113,7 +113,8 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 # 6. Start MyCrobo with PM2
-echo "[6/6] Starting MyCrobo Gateway with PM2..."
+sudo fuser -k 4177/tcp || true
+pm2 delete all || true
 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup systemd -u "$USER" --hp "$HOME" | tail -n 1 | bash || true

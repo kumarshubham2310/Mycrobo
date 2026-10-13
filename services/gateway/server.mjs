@@ -322,7 +322,7 @@ export function createGatewayServer(options = {}) {
   const securityPolicy = {
     token: options.gatewayToken ?? process.env.MYCROBO_GATEWAY_TOKEN ?? "",
     windowToken: options.windowToken ?? process.env.MYCROBO_WINDOW_TOKEN ?? "",
-    allowedHost: options.allowedHost ?? process.env.MYCROBO_GATEWAY_HOST ?? "",
+    allowedHost: options.allowedHost ?? process.env.MYCROBO_ALLOWED_HOST ?? "",
     allowedOrigin: options.allowedOrigin ?? process.env.MYCROBO_GATEWAY_ORIGIN ?? "",
     sendBrokerToken: options.sendBrokerToken ?? process.env.MYCROBO_SEND_BROKER_TOKEN ?? "",
   };
