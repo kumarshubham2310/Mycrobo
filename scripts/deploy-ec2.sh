@@ -111,28 +111,46 @@ if command -v ufw >/dev/null 2>&1; then
   sudo ufw --force enable || true
 fi
 
-# 6. Start MyCrobo with PM2
-echo "[6/6] Starting MyCrobo Gateway with PM2..."
-sudo systemctl stop pm2-root mycrobo || true
-sudo systemctl disable pm2-root mycrobo || true
-sudo rm -f /etc/systemd/system/pm2-root.service /etc/systemd/system/mycrobo.service || true
-sudo rm -rf /usr/lib/node_modules/pm2/modules/pm2-io-bpm ~/.pm2/modules || true
-sudo systemctl daemon-reload || true
-sudo pm2 kill || true
+# 6. Start MyCrobo Service with Systemd (Clean, native Linux service)
+echo "[6/6] Configuring MyCrobo systemd service..."
 pm2 kill || true
+sudo pm2 kill || true
+sudo systemctl stop pm2-ubuntu pm2-root || true
+sudo systemctl disable pm2-ubuntu pm2-root || true
+sudo rm -f /etc/systemd/system/pm2-*.service || true
 sudo fuser -k -9 4177/tcp || true
 sleep 1
-sudo fuser -k -9 4177/tcp || true
 
-pm2 delete all || true
-pm2 set pm2:pm2-io:metrics false || true
-pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup systemd -u "$USER" --hp "$HOME" | tail -n 1 | bash || true
+NODE_BIN=$(command -v node)
+PROJECT_DIR="$(pwd)"
+
+sudo tee /etc/systemd/system/mycrobo.service > /dev/null << EOF
+[Unit]
+Description=MyCrobo Gateway Server
+After=network.target
+
+[Service]
+Type=simple
+User=${USER}
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${NODE_BIN} --experimental-strip-types services/gateway/server.mjs
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=MYCROBO_GATEWAY_PORT=4177
+Environment=MYCROBO_AUTH_ROLE=owner
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable mycrobo
+sudo systemctl restart mycrobo
 
 sleep 2
 echo "Verifying local gateway status..."
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4177/api/v1/status || true
+curl -s -o /dev/null -w "Gateway HTTP Status: %{http_code}\n" http://127.0.0.1:4177/api/v1/status || true
 
 echo "=========================================="
 echo "  Deployment Complete!                   "
