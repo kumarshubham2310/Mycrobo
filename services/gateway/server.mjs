@@ -1689,7 +1689,11 @@ export function createGatewayServer(options = {}) {
   return server;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const isMain = process.argv[1] === fileURLToPath(import.meta.url)
+  || process.argv.some((arg) => typeof arg === "string" && arg.includes("server.mjs"))
+  || process.env.pm_id !== undefined;
+
+if (isMain) {
   const port = Number(process.env.MYCROBO_GATEWAY_PORT || process.env.MYCROBO_REBOOT_PORT || 4177);
   const hostBootstrapResult = await readAutoSendHostBootstrapFromFd(3, {
     tenantId: process.env.MYCROBO_TENANT_ID,

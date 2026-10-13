@@ -2,6 +2,7 @@ module.exports = {
   apps: [
     {
       name: "mycrobo-gateway",
+      cwd: __dirname,
       script: "services/gateway/server.mjs",
       node_args: "--experimental-strip-types",
       instances: 1,
