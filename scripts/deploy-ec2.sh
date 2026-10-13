@@ -50,6 +50,7 @@ sudo npm install -g pm2
 
 # 4. Configure Nginx Reverse Proxy
 echo "[4/6] Configuring Nginx reverse proxy..."
+sudo rm -f /etc/nginx/conf.d/mycrobo.conf /etc/nginx/conf.d/default.conf || true
 if [ "$PKG_MGR" = "apt" ]; then
   NGINX_CONF="/etc/nginx/sites-available/mycrobo"
   sudo tee "${NGINX_CONF}" > /dev/null << 'EOF'
@@ -73,8 +74,8 @@ server {
     }
 }
 EOF
+  sudo rm -f /etc/nginx/sites-enabled/* || true
   sudo ln -sf /etc/nginx/sites-available/mycrobo /etc/nginx/sites-enabled/
-  sudo rm -f /etc/nginx/sites-enabled/default
 else
   NGINX_CONF="/etc/nginx/conf.d/mycrobo.conf"
   sudo tee "${NGINX_CONF}" > /dev/null << 'EOF'
@@ -113,7 +114,17 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 # 6. Start MyCrobo with PM2
-sudo fuser -k 4177/tcp || true
+echo "[6/6] Starting MyCrobo Gateway with PM2..."
+sudo systemctl stop pm2-root mycrobo || true
+sudo systemctl disable pm2-root mycrobo || true
+sudo rm -f /etc/systemd/system/pm2-root.service /etc/systemd/system/mycrobo.service || true
+sudo systemctl daemon-reload || true
+sudo pm2 kill || true
+pm2 kill || true
+sudo fuser -k -9 4177/tcp || true
+sleep 1
+sudo fuser -k -9 4177/tcp || true
+
 pm2 delete all || true
 pm2 start ecosystem.config.cjs
 pm2 save

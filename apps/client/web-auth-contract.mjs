@@ -43,7 +43,9 @@ export function localWebAuthContext({ nativeDesktop = false, origin = "" } = {})
   if (nativeDesktop === true) return true;
   try {
     const url = new URL(origin);
-    return ["http:", "https:"].includes(url.protocol) && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    const isIp = /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(url.hostname) || url.hostname.startsWith("[");
+    const isLocalhost = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    return ["http:", "https:"].includes(url.protocol) && (isLocalhost || isIp)
       && !url.username && !url.password;
   } catch { return false; }
 }
