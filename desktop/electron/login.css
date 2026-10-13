@@ -1,0 +1,33 @@
+:root { color: #10251d; background: #f3f7f4; font: 16px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+.authShell { min-height: 100vh; display: grid; place-items: center; padding: 32px 20px; background: radial-gradient(circle at 10% 5%, #dff4e9 0, transparent 34%), #f5f8f6; }
+.authCard { width: min(480px, 100%); padding: 40px; border: 1px solid #cfe0d6; border-radius: 28px; background: #fff; box-shadow: 0 24px 70px #0e3f2c16; }
+.authCard > img { width: 138px; height: auto; }
+.eyebrow { margin: 34px 0 8px; color: #08794f; font-size: .75rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin: 0; font-size: clamp(2rem, 7vw, 2.65rem); line-height: 1.08; letter-spacing: -.04em; }
+.lede { margin: 14px 0 28px; color: #5f7068; }
+form, #bootstrapFields { display: grid; gap: 16px; }
+label { display: grid; gap: 7px; color: #2e463c; font-weight: 700; }
+input { width: 100%; min-height: 48px; padding: 0 14px; border: 1px solid #bdcec5; border-radius: 12px; background: #fbfdfc; color: inherit; font: inherit; }
+input:focus { outline: 3px solid #bdf25e66; border-color: #137d57; }
+button { min-height: 50px; margin-top: 4px; border: 0; border-radius: 13px; background: #087a53; color: #fff; font: 800 1rem/1 inherit; cursor: pointer; }
+button:hover { background: #056744; }
+button:disabled { cursor: wait; opacity: .62; }
+.passwordWrapper { position: relative; display: flex; align-items: center; width: 100%; }
+.passwordWrapper input { padding-right: 86px; }
+button.passwordToggle { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; margin: 0; padding: 0 10px; border: 1px solid #c8dbd0; border-radius: 9px; background: #eef7f2; color: #176a4c; font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: all .15s ease; }
+button.passwordToggle:hover { background: #e2f2e9; border-color: #83b49e; }
+button.passwordToggle:focus-visible { outline: 3px solid #bdf25e66; border-color: #137d57; }
+button.passwordToggle[aria-pressed="true"] { background: #087a53; color: #fff; border-color: #087a53; }
+.eyeIcon { display: block; flex-shrink: 0; }
+.error { min-height: 1.5em; margin: 0; color: #a02d2d; font-size: .9rem; }
+.authSwitch { margin: 8px 0 0; text-align: center; color: #5f7068; font-size: .92rem; font-weight: 500; }
+.authSwitchLink { color: #087a53; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; transition: color .15s ease; }
+.authSwitchLink:hover { color: #056744; text-decoration: underline; }
+.authSwitchLink:focus-visible { outline: 2px solid #137d57; outline-offset: 2px; border-radius: 4px; }
+aside { margin-top: 26px; padding: 16px; border-radius: 14px; background: #edf6f1; color: #52685e; font-size: .88rem; }
+aside b { display: block; color: #173d2d; }
+.hidden { display: none !important; }
+@media (max-width: 520px) { .authCard { padding: 28px 22px; border-radius: 20px; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

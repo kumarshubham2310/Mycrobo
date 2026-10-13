@@ -1,0 +1,22 @@
+name = "mycrobo-closed-pilot-web"
+main = "src/worker.mjs"
+compatibility_date = "2026-10-08"
+workers_dev = true
+preview_urls = false
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+[assets]
+directory = "../../apps/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[vars]
+# Supabase anon keys are deliberately public browser credentials. Keep every
+# privileged server credential and tenant encryption material out of this file.
+AUTH_MODE = "supabase"
+SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_REF.supabase.co"
+SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
+ALLOWED_ORIGINS = "https://mycrobo-closed-pilot-web.YOUR_ACCOUNT_SUBDOMAIN.workers.dev"
+BEHAVIOR_MAX_REQUEST_BYTES = "8192"
+RELAY_FOUNDATION_STAGE = "ciphertext-only-v1"

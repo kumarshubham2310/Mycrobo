@@ -1,0 +1,72 @@
+name: MyCrobo public source quality gates
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  node-quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: services/whatsapp-bridge/go.sum
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build the ignored runtime bridge for package-contract tests
+        run: pnpm run bridge:build
+      - run: node scripts/verify-public-snapshot.mjs
+      - run: node scripts/verify-source.mjs
+      - run: node --experimental-strip-types --test --test-concurrency=1 apps/client/*.test.mjs desktop/electron/*.test.mjs desktop/electron/*.test.cjs packages/core/*.test.mjs services/gateway/*.test.mjs contracts/*.test.mjs audit/*.acceptance.test.mjs scripts/*.test.mjs
+      - run: pnpm run cloud:web:test
+      - run: node scripts/security-scan.mjs
+      - run: pnpm --ignore-workspace audit --prod
+
+  bridge-quality:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: services/whatsapp-bridge
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: services/whatsapp-bridge/go.sum
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o ../../bin/mycrobo-live-bridge.exe ./cmd/livebridge
+      - name: Upload Windows live bridge
+        uses: actions/upload-artifact@v7
+        with:
+          name: mycrobo-live-bridge-windows
+          path: bin/mycrobo-live-bridge.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  python-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s services/translator -t . -p "test_*.py" -v

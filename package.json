@@ -1,0 +1,36 @@
+{
+  "name": "mycrobo-reboot",
+  "version": "1.0.0-alpha.29",
+  "private": true,
+  "main": "desktop/electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "bridge:build": "node scripts/build-live-bridge.mjs",
+    "verify:public": "node scripts/verify-public-snapshot.mjs",
+    "test": "node scripts/build-live-bridge.mjs --if-needed && node --experimental-strip-types --test --test-concurrency=1 apps/client/*.test.mjs desktop/electron/*.test.mjs desktop/electron/*.test.cjs packages/core/*.test.mjs services/gateway/*.test.mjs contracts/*.test.mjs audit/*.acceptance.test.mjs",
+    "verify:source": "node scripts/verify-source.mjs",
+    "verify:package": "node scripts/build-live-bridge.mjs --if-needed && node scripts/verify-package.mjs",
+    "verify:ui": "node --experimental-strip-types scripts/verify-ui.mjs",
+    "verify:pairing-ui": "node scripts/verify-pairing-ui.mjs",
+    "verify:supabase-rls": "node scripts/verify-supabase-rls.mjs",
+    "release:evidence": "node scripts/generate-release-evidence.mjs",
+    "release:manifest": "node scripts/build-live-bridge.mjs --if-needed && node scripts/generate-build-manifest.mjs",
+    "release:sbom": "node scripts/generate-sbom.mjs",
+    "security:scan": "node scripts/security-scan.mjs",
+    "audit:readiness": "node scripts/audit-production-readiness.mjs",
+    "audit:readiness:release": "node scripts/audit-production-readiness.mjs --require-ready",
+    "audit:prod": "pnpm --ignore-workspace audit --prod",
+    "package:sync": "node scripts/build-live-bridge.mjs --if-needed && node scripts/sync-package-source.mjs",
+    "cloud:web:test": "node --test infrastructure/cloudflare/web-surface.test.mjs contracts/cloud-tenant-isolation.test.mjs",
+    "cloud:web:verify": "node scripts/verify-hosted-pwa.mjs",
+    "cloud:web:verify-session": "node scripts/verify-hosted-session.mjs",
+    "cloud:web:dev": "pnpm dlx wrangler@4 dev --config infrastructure/cloudflare/wrangler.toml",
+    "cloud:web:deploy": "pnpm dlx wrangler@4 deploy --config infrastructure/cloudflare/wrangler.toml",
+    "web:start": "node scripts/start-web.mjs",
+    "start:demo": "node scripts/start-web.mjs",
+    "desktop:start": "node scripts/build-live-bridge.mjs --if-needed && electron desktop/electron/main.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.5.1"
+  }
+}

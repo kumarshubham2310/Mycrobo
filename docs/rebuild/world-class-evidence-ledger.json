@@ -1,0 +1,8 @@
+{
+  "schema": "mycrobo-world-class-evidence-ledger.1",
+  "exactBuildVersion": "1.0.0-alpha.29",
+  "exactArtifactSha256": "49ff9a6d80633c8320ede17e30b07a2ae21aded5ebe5cee396df768e5be5771e",
+  "generatedAt": "2026-10-08T09:31:52.373Z",
+  "evidence": [],
+  "note": "No pass is created automatically. Evidence must be attached to the exact release artifact by an authorized or independent verifier as required."
+}

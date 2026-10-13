@@ -1,0 +1,5 @@
+{
+  "schema": "mycrobo-cloud-deployment.1",
+  "origin": "https://mycrobo-closed-pilot-web.mycrobo-reboot.workers.dev",
+  "supabaseProjectRef": "aaedercykkgjqziybccn"
+}

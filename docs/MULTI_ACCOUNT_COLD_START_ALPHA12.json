@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "mycrobo.multi-account-cold-start.1",
+  "generatedAt": "2026-09-01T14:10:31.349Z",
+  "method": "Synthetic, content-free cold-start evaluation. Ten distinct account-level writing archetypes are tested across all ten relationship contexts. Every draft is generated locally; no send endpoint and no external model is called.",
+  "aggregate": {
+    "syntheticAccounts": 10,
+    "relationshipContexts": 10,
+    "coldStartCases": 100,
+    "generationCompletion": 1,
+    "exactTargetCitation": 1,
+    "strictAccountIsolationApplied": 1,
+    "relationshipFallbackAvailable": 1,
+    "accountOwnerPriorAvailable": 1,
+    "languageRegisterMatch": 1,
+    "averageDeterministicStyleScore": 90,
+    "crossAccountLeakage": 0,
+    "crossAccountInjectionProbesBlocked": "10/10"
+  },
+  "limitations": [
+    "Synthetic archetypes do not prove equal human-rated quality for every person or language.",
+    "The deterministic local fallback currently evaluates English, Roman Hindi and Roman Gujarati registers; broader language quality depends on an available multilingual model provider.",
+    "A brand-new account with no owner history cannot be cloned; it starts neutral and learns only from that account's evidence."
+  ],
+  "privacy": {
+    "rawMessagesStored": false,
+    "draftsStored": false,
+    "namesStored": false,
+    "externalCalls": 0,
+    "sends": 0
+  }
+}

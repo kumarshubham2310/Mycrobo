@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mycrobo.invalid/contracts/behavior-fingerprint.schema.json",
+  "title": "Content-free behavioral fingerprint",
+  "x-subject-identifier": {
+    "algorithm": "HMAC-SHA-256",
+    "key_scope": "tenant",
+    "key_version": 1,
+    "domain_separator": "behavioral-subject-v1",
+    "raw_identifiers_forbidden": true
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tenant_id",
+    "subject_hash",
+    "sample_started_at",
+    "sample_ended_at",
+    "observation_count"
+  ],
+  "properties": {
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "subject_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Lowercase hexadecimal HMAC-SHA-256 output under the tenant key and declared domain separator; never a raw identifier or unkeyed digest. Storage binds it to x-subject-identifier.key_version."
+    },
+    "sample_started_at": { "type": "string", "format": "date-time" },
+    "sample_ended_at": { "type": "string", "format": "date-time" },
+    "observation_count": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "reply_delay_p50_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 604800000 },
+    "reply_delay_p90_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 604800000 },
+    "question_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "emoji_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "brevity_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "initiation_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "schema_version": { "const": 1 }
+  }
+}

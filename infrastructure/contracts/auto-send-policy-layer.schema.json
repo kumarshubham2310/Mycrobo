@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mycrobo.invalid/contracts/auto-send-policy-layer.schema.json",
+  "title": "Configurable auto-send policy layer (execution locked)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tenant_id",
+    "user_id",
+    "layer_kind",
+    "mode",
+    "allow_groups",
+    "human_approval_required",
+    "minimum_confidence",
+    "maximum_daily_sends",
+    "execution_authorized"
+  ],
+  "properties": {
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "user_id": { "type": "string", "format": "uuid" },
+    "layer_kind": { "enum": ["tenant", "relationship", "chat"] },
+    "relationship_subject_hmac": { "$ref": "#/$defs/subjectHmac" },
+    "relationship_subject_hmac_key_version": { "$ref": "#/$defs/keyVersion" },
+    "chat_subject_hmac": { "$ref": "#/$defs/subjectHmac" },
+    "chat_subject_hmac_key_version": { "$ref": "#/$defs/keyVersion" },
+    "mode": { "enum": ["never", "draft", "countdown", "safe", "custom"] },
+    "allow_groups": { "type": "boolean" },
+    "human_approval_required": { "type": "boolean" },
+    "minimum_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "maximum_daily_sends": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "execution_authorized": {
+      "const": false,
+      "description": "Configuration storage cannot authorize delivery. A separately audited execution boundary is required."
+    }
+  },
+  "$defs": {
+    "subjectHmac": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Tenant-keyed HMAC-SHA-256 subject ID. Raw chat and contact identifiers are forbidden."
+    },
+    "keyVersion": { "type": "integer", "minimum": 1, "maximum": 32767 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "layer_kind": { "const": "tenant" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["relationship_subject_hmac"] },
+            { "required": ["relationship_subject_hmac_key_version"] },
+            { "required": ["chat_subject_hmac"] },
+            { "required": ["chat_subject_hmac_key_version"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "layer_kind": { "const": "relationship" } } },
+      "then": {
+        "required": ["relationship_subject_hmac", "relationship_subject_hmac_key_version"],
+        "not": {
+          "anyOf": [
+            { "required": ["chat_subject_hmac"] },
+            { "required": ["chat_subject_hmac_key_version"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "layer_kind": { "const": "chat" } } },
+      "then": {
+        "required": ["chat_subject_hmac", "chat_subject_hmac_key_version"],
+        "not": {
+          "anyOf": [
+            { "required": ["relationship_subject_hmac"] },
+            { "required": ["relationship_subject_hmac_key_version"] }
+          ]
+        }
+      }
+    }
+  ]
+}

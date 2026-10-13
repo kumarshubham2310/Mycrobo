@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#123f2e" />
+    <meta name="application-name" content="MyCrobo" />
+    <title>MyCrobo</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/assets/mycrobo-app-v2.ico" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <a class="skipLink" href="#appContent">Skip to MyCrobo content</a>
+    <section class="authOverlay hidden" id="authOverlay" aria-labelledby="authTitle">
+      <div class="authCard">
+        <img src="/assets/mycrobo-lockup-v1.png" alt="MyCrobo" />
+        <p class="eyebrow" id="authEyebrow">Welcome back</p>
+        <h1 id="authTitle">Sign in to MyCrobo</h1>
+        <p class="lede" id="authDescription">Unlock only the workspaces assigned to your account.</p>
+
+        <form id="authForm" autocomplete="on">
+          <div id="bootstrapFields" class="hidden">
+            <label><span>Your name</span><input name="displayName" autocomplete="name" maxlength="80" /></label>
+          </div>
+          <label><span>Email</span><input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required /></label>
+          <label>
+            <span>Password</span>
+            <span class="passwordWrapper">
+              <input name="password" id="passwordInput" type="password" autocomplete="current-password" minlength="12" maxlength="256" required />
+              <button type="button" class="passwordToggle" id="passwordToggle" aria-controls="passwordInput" aria-label="Show password" aria-pressed="false" title="Show password">
+                <svg class="eyeIcon eyeNormal" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/></svg>
+                <svg class="eyeIcon eyeSlash hidden" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                <span id="passwordToggleLabel">Show</span>
+              </button>
+            </span>
+          </label>
+          <button type="submit" id="submitAuth">Sign in</button>
+          <p class="error" id="authError" role="alert"></p>
+          <p class="authSwitch" id="authSwitch">
+            <span id="authSwitchPrompt">Don't have an account?</span>
+            <a href="#" id="toggleAuthMode" class="authSwitchLink" role="button">Sign up</a>
+          </p>
+        </form>
+
+        <aside id="authBoundary"><b>Your data stays separated.</b> Signing in selects only workspaces you are allowed to use. It never links WhatsApp or sends a message.</aside>
+      </div>
+    </section>
+    <main class="appShell">
+      <aside class="primaryRail">
+        <a class="brand" href="/" aria-label="MyCrobo home">
+          <img src="/assets/mycrobo-lockup-v1.png" alt="MyCrobo" />
+        </a>
+        <nav aria-label="Primary navigation">
+          <button class="active" data-view="chats"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14v10.5H9l-4 3v-13.5Z"/><path d="M8.5 10h7M8.5 13h4"/></svg></span><span>Chats</span></button>
+          <button data-view="pending"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 8 5v8l-8 5-8-5V8l8-5Z"/><path d="M12 8.25v4.5M12 16.25h.01"/></svg></span><span>Decisions</span><span class="navCount" id="pendingCount">0</span></button>
+          <button data-view="tasks"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5 9.25 17 19 7"/></svg></span><span>Tasks</span><span class="navCount" id="taskCount">0</span></button>
+          <button data-view="followups"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 17.5c2.5-7 7-10 14-10"/><path d="m14.5 4.5 4.5 3-3 4.5"/></svg></span><span>Follow-ups</span><span class="navCount" id="followUpCount">0</span></button>
+          <button data-view="connections"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9.5 14.5 14.5 9"/><path d="M7 17H5.5a3.5 3.5 0 0 1 0-7H9M15 7h3.5a3.5 3.5 0 0 1 0 7H15"/></svg></span><span>Connections</span></button>
+          <button data-view="settings"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M18 6l-1.5 1.5M7.5 16.5 6 18M18 18l-1.5-1.5M7.5 7.5 6 6"/></svg></span><span>Settings</span></button>
+          <button class="hidden" id="adminNav" data-view="admin"><span class="navIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M6 20v-2.5A4.5 4.5 0 0 1 10.5 13h3a4.5 4.5 0 0 1 4.5 4.5V20"/><path d="M18.5 7.5h2M19.5 6.5v2"/></svg></span><span>Administration</span></button>
+        </nav>
+        <section class="accountCard hidden" id="accountCard" aria-label="Signed-in account">
+          <span class="accountAvatar" id="accountAvatar" aria-hidden="true">M</span>
+          <span><b id="accountName">Signed in</b><small id="accountWorkspace"></small></span>
+          <button class="hidden" type="button" id="openPlatformConsole" title="Open the separate MyCrobo platform console">Platform console</button>
+          <button type="button" id="signOut" title="Sign out of MyCrobo">Sign out</button>
+        </section>
+        <div class="connectionCard">
+          <span class="statusDot" aria-hidden="true"></span>
+          <span class="connection" id="connection">Connecting…</span>
+          <button class="connectionAction hidden" id="reconnect">Reconnect</button>
+        </div>
+      </aside>
+
+      <section class="appStage" id="appContent" tabindex="-1">
+        <button class="connectionNotice hidden" id="connectionNotice" type="button" aria-live="polite"></button>
+        <section class="setupPanel hidden" id="setupPanel" aria-live="polite"></section>
+        <section class="workspace" id="workspace">
+          <aside class="chatRail">
+            <header>
+              <div><span class="sectionLabel">Your conversations</span><h1>Chats</h1></div>
+              <button class="iconButton" id="refresh" aria-label="Refresh chats and open conversation" title="Refresh chats and open conversation">↻</button>
+            </header>
+            <label class="searchBox"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search conversations" aria-label="Search names or saved messages" /></label>
+            <div class="filters" role="group" aria-label="Chat collection">
+              <button class="active" data-collection="active" aria-pressed="true">Recent</button>
+              <button data-collection="archived" aria-pressed="false">Archived</button>
+            </div>
+            <div id="chatList" class="chatList"></div>
+          </aside>
+          <section class="conversation" aria-labelledby="conversationTitle">
+            <header id="conversationHeader"><div><span class="sectionLabel">Conversation</span><h2 id="conversationTitle" tabindex="-1">Choose a chat</h2><p>The latest message will be verified before it is shown.</p></div></header>
+            <aside class="contextPanel hidden" id="contextPanel"></aside>
+            <div id="messageList" class="messageList">
+              <div class="emptyState"><span class="emptyMark" aria-hidden="true">M</span><h2>Your conversations, without the clutter</h2><p>Select a chat to see its verified history and a reply recommendation.</p></div>
+            </div>
+            <button class="newMessageNotice hidden" id="newMessageNotice" type="button" role="status">New messages <span aria-hidden="true">↓</span></button>
+            <footer id="replyPanel" class="replyPanel hidden" aria-live="polite"></footer>
+          </section>
+        </section>
+
+        <section class="overviewPanel hidden" id="overviewPanel" aria-labelledby="overviewTitle">
+          <header class="overviewHeader">
+            <div><span class="overviewEyebrow" id="overviewEyebrow"></span><h1 id="overviewTitle"></h1><p id="overviewDescription"></p></div>
+            <button class="refreshButton" id="refreshOverview"><span aria-hidden="true">↻</span> Refresh</button>
+          </header>
+          <div class="overviewBody"><div class="overviewList" id="overviewList"></div></div>
+        </section>
+        <section class="connectionsPanel hidden" id="connectionsPanel" aria-labelledby="connectionsTitle"><div class="connectionsScroller">
+          <header class="settingsHeader connectionHeader"><span class="overviewEyebrow">Private context, under your control</span><h1 id="connectionsTitle">Connections</h1><p>Choose which read-only sources MyCrobo may use. Reduced imported context remains encrypted on this device and can be removed from here.</p><button class="refreshButton" id="refreshConnections"><span aria-hidden="true">↻</span> Refresh status</button></header>
+          <article class="directConnectionCard whatsappConnection" id="whatsappConnection"><div class="whatsappMark" aria-hidden="true">W</div><div><span class="directEyebrow">Workspace-specific connection</span><h2>WhatsApp</h2><p>This workspace uses its own local WhatsApp session, chat store, settings, attachments and learned communication preferences.</p><p class="integrationStatus" id="whatsappStatus">Checking connection…</p><div class="tenantActions" id="tenantActions"></div></div><div class="directActions"><button id="connectWhatsApp" type="button">Connect WhatsApp</button><button class="quietDanger hidden" id="logoutWhatsApp" type="button">Log out WhatsApp</button></div></article>
+          <article class="directConnectionCard" id="webRelayConnection"><div class="webRelayMark" aria-hidden="true">M</div><div><span class="directEyebrow">Protected closed pilot</span><h2>MyCrobo Web</h2><p>Prove that this desktop and the web pilot belong to the same person and workspace. The password is used once and never stored; the desktop key and session are protected by Windows.</p><p class="integrationStatus" id="webRelayStatus" role="status">Checking desktop preparation…</p><form class="relayIdentityForm" id="relayIdentityForm"><label><span>Email</span><input name="email" type="email" autocomplete="username" required /></label><label><span>Password</span><span class="passwordField"><input id="relayPassword" name="password" type="password" autocomplete="current-password" minlength="8" required /><button type="button" id="toggleRelayPassword" aria-controls="relayPassword" aria-label="Show password" aria-pressed="false">Show</button></span></label><label class="hidden" id="cloudTenantChoice"><span>Cloud workspace</span><select name="cloudTenantId"></select></label><button type="submit" id="prepareDesktopRelay">Prepare this desktop</button></form><p class="relayBoundary">Preparation does not upload chats, pair a browser, enable drafting, or send a message.</p></div><div class="relayState" id="webRelayState" aria-hidden="true">Not prepared</div></article>
+          <article class="directConnectionCard" id="googleConnection"><div class="googleMark" aria-hidden="true">G</div><div><span class="directEyebrow">Optional context</span><h2>Gmail and Google Calendar</h2><p>Sign in through your normal browser with exact read-only Gmail and Calendar access. MyCrobo retains only bounded, content-free Gmail counts and opaque sync digests—not senders, recipients, subjects, snippets or message bodies—and reduces Calendar events to availability blocks. This Google context stays in the encrypted workspace and is never sent to a drafting provider.</p><p class="integrationStatus" id="googleStatus">Checking availability…</p></div><div class="directActions"><button id="connectGoogle" type="button">Connect Google</button><button class="secondary hidden" id="syncGoogle" type="button">Refresh now</button><button class="quietDanger hidden" id="disconnectGoogle" type="button">Disconnect</button></div></article>
+          <div class="runtimeGrid" id="runtimeConnections" aria-live="polite"></div>
+          <details class="advancedImports"><summary>Advanced: import files instead</summary><p>Use this only when account connection is unavailable or when you want a one-time offline snapshot.</p><div class="connectionGrid">
+              <article class="integrationCard" id="contactsConnection"><div class="integrationIcon" aria-hidden="true">C</div><div class="integrationCopy"><h2>Contacts file</h2><p>Import a VCF file. MyCrobo keeps only names, phone numbers and email addresses—never contact notes.</p><p class="integrationStatus" id="contactsStatus">Not imported</p></div><div class="integrationActions"><label class="fileImport">Import VCF<input id="contactsFile" type="file" accept=".vcf,text/vcard,text/x-vcard" /></label><button class="secondary hidden" id="removeContacts" type="button">Remove</button></div></article>
+              <article class="integrationCard" id="calendarConnection"><div class="integrationIcon" aria-hidden="true">A</div><div class="integrationCopy"><h2>Calendar file</h2><p>Import an ICS file. Only busy intervals are retained; titles, descriptions and attendees are discarded.</p><p class="integrationStatus" id="calendarStatus">Not imported</p></div><div class="integrationActions"><label class="fileImport">Import ICS<input id="calendarFile" type="file" accept=".ics,text/calendar" /></label><button class="secondary hidden" id="removeCalendar" type="button">Remove</button></div></article>
+            </div></details>
+          <aside class="connectionGuard"><b>What MyCrobo will not do</b><p>Calendar context is advisory only. It never creates an event, promises a time, sends a reply, or bypasses final review.</p></aside>
+        </div></section>
+        <section class="settingsPanel hidden" id="settingsPanel" aria-labelledby="settingsTitle"><div class="settingsScroller">
+          <header class="settingsHeader"><span class="overviewEyebrow">Only controls that change the app</span><h1 id="settingsTitle">Settings</h1><p>MyCrobo can match English, Roman Hindi and Roman Gujarati when conversation evidence is available. These choices affect drafts and this device only.</p></header>
+          <form class="settingsForm" id="settingsForm">
+            <fieldset class="autoReplySection" id="autoReplySection"><legend>Auto-reply</legend>
+              <label class="toggleLabel"><span><b>Global Auto-reply</b><small>When ON, new incoming WhatsApp messages are automatically analyzed and replied. When OFF, auto-reply is disabled and messages require manual review.</small></span><input type="checkbox" name="autoReplyEnabled" id="globalAutoReplySwitch" aria-label="Global Auto-reply" /></label>
+              <div class="autoReplyBanner" id="autoReplyBanner"><span class="autoReplyBadge off" id="globalAutoReplyBadge">Auto-reply is OFF</span><p class="autoReplyTip" id="autoReplyTip">When OFF, AI prepares drafts for your review only. Turn ON to automatically send replies to incoming messages.</p></div>
+            </fieldset>
+            <fieldset><legend>Suggested replies</legend>
+              <label><span class="settingCopy"><b>Language</b><small>Match each conversation, or prefer one language for new drafts.</small></span><select name="draftLanguage" aria-label="Language"><option value="match">Match the conversation</option><option>English</option><option>Roman Hindi</option><option>Roman Gujarati</option></select></label>
+              <label><span class="settingCopy"><b>Reply length</b><small>“Match my style” uses person-specific evidence when enough is available, then falls back conservatively.</small></span><select name="replyLength" aria-label="Reply length"><option value="match">Match my style</option><option value="short">Keep it short</option><option value="medium">Allow a little detail</option></select></label>
+            </fieldset>
+            <fieldset><legend>On this device</legend>
+              <label class="toggleLabel"><span><b>Live updates</b><small>Update the open conversation when WhatsApp reports a change.</small></span><input type="checkbox" name="liveUpdates" aria-label="Live updates" /></label>
+              <label><span class="settingCopy"><b>Layout density</b><small>Compact mode shows more items without changing message text.</small></span><select name="density" aria-label="Layout density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
+              <label><span class="settingCopy"><b>Default delivery policy</b><small>Choose what new conversations inherit. Delivery stays off until consent and every protected execution gate are ready.</small></span><select name="defaultSendingMode" aria-label="Default delivery policy"><option value="never">Never send automatically</option><option value="draft">Draft for my review</option><option value="countdown">Safe countdown</option><option value="safe">Safe automatic delivery</option><option value="custom">Custom policy</option></select></label>
+            </fieldset>
+            <section class="truthCard autonomyCard" id="autonomyCard" aria-labelledby="autonomyTitle">
+              <div class="truthCardHeader"><span class="storageIcon" aria-hidden="true">◈</span><div><h2 id="autonomyTitle">Automatic delivery consent</h2><p>Policy, consent and protected execution are independent. Saving either preference never by itself starts delivery.</p></div></div>
+              <div class="autonomyFacts"><div><span>Saved policy</span><b id="autonomyPolicy">Checking…</b></div><div><span>Execution consent</span><b id="autonomyConsent">Checking…</b></div><div><span>Real delivery</span><b id="autonomyDelivery">Checking…</b></div></div>
+              <p class="protectionNotice" id="autonomyStatus" role="status"><b>No automatic message is sent from Settings.</b> Loading saved configuration…</p>
+              <ul class="autonomyReadiness" id="autonomyReadiness" aria-label="Protected automatic delivery readiness"></ul>
+              <div class="autonomyActions"><button type="button" id="grantAutoSendConsent">Record consent</button><button type="button" class="dangerSecondary" id="revokeAutoSendConsent">Revoke consent</button><button type="button" class="dangerSecondary" id="emergencyStopAutoSend">Emergency stop</button></div>
+            </section>
+            <section class="storageCard" id="storageCard" aria-labelledby="storageTitle" aria-live="polite">
+              <div><span class="storageIcon" aria-hidden="true">▱</span><div><h2 id="storageTitle">Storage on this device</h2><p id="storageSummary">Calculating local storage…</p></div></div>
+              <div class="storageMeter" role="meter" aria-label="Media cache use" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="storageMeterFill"></span></div>
+              <p class="storagePolicy" id="storagePolicy">Messages already saved on this device keep their chronology. Full attachments use a bounded cache and may need to be fetched again when opened.</p>
+            </section>
+            <section class="truthCard" id="syncTruthCard" aria-labelledby="syncTruthTitle" aria-live="polite">
+              <div class="truthCardHeader"><span class="storageIcon" aria-hidden="true">✓</span><div><h2 id="syncTruthTitle">Sync truth</h2><p id="syncTruthStatement">Checking exactly what is saved and what remains partial…</p></div></div>
+              <div class="truthGrid" id="syncTruthGrid"></div>
+            </section>
+            <section class="truthCard protectionCard" id="privacyCard" aria-labelledby="privacyTitle" aria-live="polite">
+              <div class="truthCardHeader"><span class="storageIcon" aria-hidden="true">⌾</span><div><h2 id="privacyTitle">Security &amp; privacy protections</h2><p id="privacyStatement">Checking the protections enforced by this build…</p></div></div>
+              <p class="protectionNotice"><b>Status only.</b> These are safeguards, not preferences. They cannot be weakened from Settings. Your editable choices are above.</p>
+              <div class="privacyList" id="privacyList"></div>
+            </section>
+            <section class="dataControls" aria-labelledby="dataControlsTitle">
+              <div><h2 id="dataControlsTitle">Your local MyCrobo data</h2><p>Export your settings and learned conversation preferences, or reset only that MyCrobo metadata. WhatsApp history is not deleted by this control.</p></div>
+              <div><button type="button" id="exportLocalState">Export settings</button><button type="button" class="dangerSecondary hidden" id="removeLegacyRecovery">Remove migration recovery copy</button><button type="button" class="dangerSecondary" id="resetLocalState">Reset MyCrobo metadata</button></div>
+            </section>
+            <div class="settingsSave"><p id="settingsStatus" role="status">Changes save on this device.</p><button type="submit">Save settings</button></div>
+          </form>
+        </div></section>
+        <section class="adminPanel hidden" id="adminPanel" aria-labelledby="adminTitle"><div class="adminScroller">
+          <header class="settingsHeader adminHeader"><span class="overviewEyebrow">Secure workspace control</span><h1 id="adminTitle">Administration</h1><p>Create workspaces and accounts, then give each person only the access they need. Changes are recorded by the local control plane.</p><button class="refreshButton" id="refreshAdmin" type="button"><span aria-hidden="true">↻</span> Refresh</button></header>
+          <p class="adminNotice" id="adminNotice" role="status">Loading authorized workspaces and people…</p>
+          <div class="adminCreateGrid">
+            <form class="adminForm" id="createTenantForm"><span class="overviewEyebrow">New workspace</span><h2>Create a private workspace</h2><label>Workspace name<input name="name" required minlength="2" maxlength="80" autocomplete="organization" /></label><button type="submit">Create workspace</button></form>
+            <form class="adminForm" id="createUserForm"><span class="overviewEyebrow">New person</span><h2>Create an account</h2><label>Name<input name="displayName" required maxlength="80" autocomplete="name" /></label><label>Email<input name="email" required type="email" maxlength="254" autocomplete="off" /></label><label>Temporary password<input name="password" required type="password" minlength="12" maxlength="256" autocomplete="new-password" /></label><label>Workspace<select name="tenantId" id="newUserTenant" required></select></label><label>Role<select name="role"><option value="member">Member</option><option value="viewer">Viewer</option><option value="admin">Administrator</option><option value="owner">Owner</option></select></label><label class="adminCheck"><input name="platformAdmin" type="checkbox" /> Platform administrator</label><button type="submit">Create account</button></form>
+          </div>
+          <section class="adminSection" aria-labelledby="workspaceAdminTitle"><div><span class="overviewEyebrow">Workspaces</span><h2 id="workspaceAdminTitle">Workspace access boundaries</h2></div><div class="adminList" id="adminTenantList"></div></section>
+          <section class="adminSection" aria-labelledby="peopleAdminTitle"><div><span class="overviewEyebrow">People &amp; access</span><h2 id="peopleAdminTitle">Memberships</h2></div><div class="adminList" id="adminUserList"></div></section>
+        </div></section>
+        <div class="toastRegion" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+      </section>
+    </main>
+    <script type="module" src="/pwa-register.mjs"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

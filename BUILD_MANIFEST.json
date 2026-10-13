@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "3.0",
+  "product": "MyCrobo",
+  "version": "1.0.0-alpha.29",
+  "generatedAt": "2026-10-08T09:31:51.782Z",
+  "mode": "local-internal-alpha",
+  "distribution": {
+    "kind": "portable-internal-alpha",
+    "signed": false,
+    "installer": false,
+    "updater": false
+  },
+  "provenance": {
+    "sourceRevision": "7985c8ee5ebaac56f7d19ad121db3b41cdea928b",
+    "sourceTreeClean": true,
+    "sourceDateEpoch": "1791451656",
+    "toolchain": {
+      "node": "v24.19.0",
+      "packageManager": "pnpm/11.25.0 npm/? node/v24.19.0 win32 x64",
+      "go": "go1.27.0 windows/amd64",
+      "electron": "44.5.1",
+      "wrapperProduct": "1.0.0-alpha.2"
+    },
+    "recipeHashes": {
+      "manifestGenerator": "add59b8b26398bf6a9a1454d9c704d5f06ce6af3c08436518d813bde98bab478",
+      "evidenceGenerator": "e90d29dff200bdb0e01fdca979a4fdf0a921437e7b47b95ece2266b57d24ccbf",
+      "runtimePackageSpec": "1b0d6b6a6b29a7b834a240cc4b8eefe4a3f1089293538275b2c9253f56ce93bc",
+      "packageSynchronizer": "b003cba4e9ee8f7ebe58b7c92000b7070da4fa14880cc944e809df756edabf24",
+      "packageVerifier": "614e3162c694e7e4a62d1e5ed7360b9c4a17008ef8182433ce71feeb1847d997",
+      "readinessContract": "c21f3f4eb38d9ef19aaf7c756234a75ae3bf623fa23137c28eb873b36249d7fe",
+      "readinessAuditor": "be8ca99d07258b332cc7bfa04e3aa0714a901d0875570c251ef5c0d10cfae590",
+      "qualityWorkflow": "396d557793bbf481f5bd07bc9410280eca539c1890a52c8147838206c5fade6b",
+      "lockfile": "e56494066cd241171b8761ea74314e7f11e2c664a2167a7941cdb6b3c823122b"
+    }
+  },
+  "hashes": {
+    "bin/mycrobo-live-bridge.exe": {
+      "bytes": 34188800,
+      "sha256": "746a2c2414c5f9872707edf93d53dea96c7eea16e794c65049876ace0ba8b683"
+    },
+    "MyCroboReboot.exe": {
+      "bytes": 225539072,
+      "sha256": "a84b119b3a82a6f6ba24abdb32ba75f191fd2c000c6e9f505623fbc7fe77bece"
+    },
+    "resources/app.runtime-tree": {
+      "files": 92,
+      "sha256": "daac6703c264f6adb8de49bf2c6d540a77f2738d4790c829f258a92875fe3f42"
+    },
+    "release-bundle": {
+      "components": [
+        "MyCroboReboot.exe",
+        "resources/app.runtime-tree",
+        "bin/mycrobo-live-bridge.exe"
+      ],
+      "sha256": "49ff9a6d80633c8320ede17e30b07a2ae21aded5ebe5cee396df768e5be5771e"
+    }
+  },
+  "verification": {
+    "nodeTests": {
+      "passed": 610,
+      "failed": 0
+    },
+    "goBridgeTests": "passed",
+    "goVet": "passed",
+    "sourceSecurityScan": {
+      "files": 273,
+      "findings": 0
+    },
+    "packageCriticalSourceParity": {
+      "files": 92,
+      "status": "passed"
+    },
+    "rollbackTested": false,
+    "reproducibleBuild": false,
+    "realWhatsAppOutboundTested": false,
+    "realWhatsAppMessageSentDuringVerification": false,
+    "fullWhatsAppLifetimeHistoryProven": false,
+    "ownerRatedPersonalizationGateComplete": false
+  },
+  "releaseClaim": "Internal review-only alpha. Automatic sending remains disabled. This unsigned portable build is not approved for public production release."
+}

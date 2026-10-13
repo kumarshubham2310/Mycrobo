@@ -1,0 +1,138 @@
+# Environment and API credentials
+.env
+.env.*
+!.env.example
+*.env
+*.secret
+*.secrets
+secrets/
+credentials/
+credentials*.json
+service-account*.json
+*api-key*
+*apikey*
+.npmrc
+.pypirc
+.netrc
+_netrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# MyCrobo tenant, account and messaging data
+tenants/
+profiles/
+user-data/
+userdata/
+AppData/
+messages.db*
+messages*.db*
+linked-device*.db*
+workspace.db*
+control-plane.db*
+*.vault.db*
+desktop-session.bin
+platform-admin-session.bin
+model-provider-key.bin
+local-translator.json
+tenant-registry*.json
+account-binding*.json
+plan-entitlement*.json
+runtime-status*.json
+operations.jsonl*
+diagnostics/
+
+# Browser/session state and local caches
+Cookies*
+Local Storage/
+Session Storage/
+IndexedDB/
+Cache/
+Code Cache/
+GPUCache/
+blob_storage/
+Network/
+Shared Dictionary/
+media-cache/
+attachments-cache/
+thumbnails-cache/
+
+# Generated evaluations that may be derived from private conversations
+*backtest*.json
+*checkpoint*.json
+*diagnostic*.json
+*evaluation-results*.json
+*release-evidence*.json
+
+# Local model weights and large generated artifacts
+models/
+model-cache/
+*.safetensors
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.ckpt
+
+# Dependencies, builds and coverage
+node_modules/
+vendor/bundle/
+coverage/
+.nyc_output/
+dist/
+build/
+out/
+release/
+.package-smoke/
+.test-bin/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Packaged applications, native binaries and archives
+*.exe
+*.dll
+*.node
+*.msi
+*.msix
+*.appx
+*.dmg
+*.deb
+*.rpm
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+
+# Logs and temporary/recovery files
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+*-wal
+*-shm
+repair-backups/
+app-backup-*/
+package-backups/
+
+# Local development and editor state
+.codex/
+.codex_tmp/
+.codex-remote-attachments/
+.wrangler/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local audit/report output with machine-specific paths
+docs/rebuild/*-current.json
+docs/rebuild/*-checkpoint*.json

@@ -1,0 +1,30 @@
+name = "mycrobo-closed-pilot-web"
+main = "src/worker.mjs"
+compatibility_date = "2026-10-08"
+workers_dev = false
+preview_urls = false
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
+
+# The existing MyCrobo client is deployed as the static PWA. The Worker runs
+# first so Access is enforced and /api/* can never fall through to index.html.
+[assets]
+directory = "../../apps/client"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+# Uncomment only after the hostname is active in this Cloudflare account and
+# its Access application/policy has been created.
+# [[routes]]
+# pattern = "mycrobo.YOUR_DOMAIN.example"
+# custom_domain = true
+
+[vars]
+SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_REF.supabase.co"
+SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
+CF_ACCESS_REQUIRED = "true"
+CF_ACCESS_TEAM_DOMAIN = "https://YOUR_TEAM.cloudflareaccess.com"
+CF_ACCESS_AUD = "YOUR_ACCESS_APPLICATION_AUDIENCE"
+ALLOWED_ORIGINS = "https://mycrobo.YOUR_DOMAIN.example"
+BEHAVIOR_MAX_REQUEST_BYTES = "8192"
+RELAY_FOUNDATION_STAGE = "ciphertext-only-v1"
