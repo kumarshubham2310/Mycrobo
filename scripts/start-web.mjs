@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const isWin = process.platform === "win32";
 const electronExe = resolve(root, "node_modules", "electron", "dist", isWin ? "electron.exe" : "electron");
-const nodeExe = existsSync(electronExe) ? electronExe : process.execPath;
+const nodeExe = (isWin && existsSync(electronExe)) ? electronExe : process.execPath;
 const bridgeExe = resolve(root, "bin", isWin ? "mycrobo-live-bridge.exe" : "mycrobo-live-bridge");
 
 if (!existsSync(nodeExe)) {
