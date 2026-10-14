@@ -1,18 +1,24 @@
 import { spawn, execSync } from "node:child_process";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, chmodSync } from "node:fs";
 import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const isWin = process.platform === "win32";
 const electronExe = resolve(root, "node_modules", "electron", "dist", isWin ? "electron.exe" : "electron");
+const nodeExe = existsSync(electronExe) ? electronExe : process.execPath;
 const bridgeExe = resolve(root, "bin", isWin ? "mycrobo-live-bridge.exe" : "mycrobo-live-bridge");
 
-if (!existsSync(electronExe)) {
-  console.error("Electron binary not found in node_modules. Please run 'npm install' first.");
+if (!existsSync(nodeExe)) {
+  console.error("Node runtime not found. Please install Node.js 22+ LTS.");
   process.exit(1);
+}
+
+// Make sure Linux bridge binary is executable if present
+if (!isWin && existsSync(bridgeExe)) {
+  try { chmodSync(bridgeExe, 0o755); } catch {}
 }
 
 function freePort() {
@@ -27,9 +33,11 @@ function freePort() {
   });
 }
 
-const appDataRoot = process.env.APPDATA || resolve(root, ".data");
+const appDataRoot = process.env.APPDATA || (process.env.HOME ? resolve(process.env.HOME, ".config") : resolve(root, ".data"));
 
 function discoverDesktopTenant() {
+  if (!isWin) return null; // Windows desktop profile discovery only on Windows desktop
+
   const searchBases = [
     resolve(appDataRoot, "Electron"),
     resolve(appDataRoot, "mycrobo-reboot"),
@@ -126,7 +134,7 @@ if (activeDesktopTenant) {
   vaultKey = activeDesktopTenant.vaultKey;
   messageDbKeyHex = Buffer.from(vaultKey, "base64").toString("hex");
 } else {
-  console.log("No existing Desktop workspace found. Initializing standalone web workspace...");
+  console.log("Starting web workspace mode...");
   const defaultBase = resolve(appDataRoot, "mycrobo-reboot");
   tenantId = "tenant-0000000000000001";
   userId = "user-000000000000000000000001";
@@ -166,6 +174,21 @@ process.on("exit", cleanShutdown);
 
 let bridgeUrl = null;
 let bridgeToken = null;
+
+if (!existsSync(bridgeExe)) {
+  console.log("Bridge executable not found. Attempting to build...");
+  try {
+    const buildScript = resolve(root, "scripts", "build-live-bridge.mjs");
+    if (existsSync(buildScript)) {
+      execSync(`"${process.execPath}" "${buildScript}"`, { cwd: root, stdio: "inherit" });
+      if (!isWin && existsSync(bridgeExe)) {
+        try { chmodSync(bridgeExe, 0o755); } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn("Could not build live bridge automatically:", err.message);
+  }
+}
 
 if (existsSync(bridgeExe)) {
   const bridgePort = await freePort();
@@ -246,7 +269,7 @@ const gatewayEnv = {
 };
 
 console.log(`Starting MyCrobo Web Gateway on http://localhost:${gatewayPort}...`);
-gatewayChild = spawn(electronExe, ["--experimental-strip-types", resolve(root, "services", "gateway", "server.mjs")], {
+gatewayChild = spawn(nodeExe, ["--experimental-strip-types", resolve(root, "services", "gateway", "server.mjs")], {
   cwd: root,
   stdio: "inherit",
   env: gatewayEnv,

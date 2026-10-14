@@ -20,13 +20,13 @@ fi
 echo "[1/6] Detected package manager: ${PKG_MGR}. Updating system packages..."
 if [ "$PKG_MGR" = "apt" ]; then
   sudo apt-get update -y
-  sudo apt-get install -y curl git ufw nginx
+  sudo apt-get install -y curl git ufw nginx golang-go
 elif [ "$PKG_MGR" = "dnf" ]; then
   sudo dnf update -y
-  sudo dnf install -y curl git nginx
+  sudo dnf install -y curl git nginx golang
 elif [ "$PKG_MGR" = "yum" ]; then
   sudo yum update -y
-  sudo yum install -y curl git nginx
+  sudo yum install -y curl git nginx golang
 fi
 
 # 2. Install Node.js 22 LTS (Required for node:sqlite & --experimental-strip-types)
@@ -44,9 +44,16 @@ fi
 NODE_VERSION=$(node -v)
 echo "Node.js version installed: ${NODE_VERSION}"
 
-# 3. Install PM2
-echo "[3/6] Installing PM2 process manager..."
-sudo npm install -g pm2
+# 3. Build & ensure live WhatsApp bridge binary is ready
+echo "[3/6] Ensuring WhatsApp live bridge binary is built..."
+chmod +x bin/mycrobo-live-bridge 2>/dev/null || true
+if [ ! -f bin/mycrobo-live-bridge ] || [ ! -s bin/mycrobo-live-bridge ]; then
+  if command -v go >/dev/null 2>&1; then
+    echo "Compiling bin/mycrobo-live-bridge from Go source..."
+    (cd services/whatsapp-bridge && go build -trimpath -o ../../bin/mycrobo-live-bridge ./cmd/livebridge)
+  fi
+fi
+chmod +x bin/mycrobo-live-bridge 2>/dev/null || true
 
 # 4. Configure Nginx Reverse Proxy
 echo "[4/6] Configuring Nginx reverse proxy..."
@@ -111,14 +118,14 @@ if command -v ufw >/dev/null 2>&1; then
   sudo ufw --force enable || true
 fi
 
-# 6. Start MyCrobo Service with Systemd (Clean, native Linux service)
+# 6. Start MyCrobo Service with Systemd (Starts live bridge + gateway)
 echo "[6/6] Configuring MyCrobo systemd service..."
-pm2 kill || true
-sudo pm2 kill || true
-sudo systemctl stop pm2-ubuntu pm2-root || true
-sudo systemctl disable pm2-ubuntu pm2-root || true
+pm2 kill || true 2>/dev/null
+sudo pm2 kill || true 2>/dev/null
+sudo systemctl stop pm2-ubuntu pm2-root || true 2>/dev/null
+sudo systemctl disable pm2-ubuntu pm2-root || true 2>/dev/null
 sudo rm -f /etc/systemd/system/pm2-*.service || true
-sudo fuser -k -9 4177/tcp || true
+sudo fuser -k -9 4177/tcp || true 2>/dev/null
 sleep 1
 
 NODE_BIN=$(command -v node)
@@ -126,19 +133,18 @@ PROJECT_DIR="$(pwd)"
 
 sudo tee /etc/systemd/system/mycrobo.service > /dev/null << EOF
 [Unit]
-Description=MyCrobo Gateway Server
+Description=MyCrobo Web Gateway and WhatsApp Live Bridge
 After=network.target
 
 [Service]
 Type=simple
 User=${USER}
 WorkingDirectory=${PROJECT_DIR}
-ExecStart=${NODE_BIN} --experimental-strip-types services/gateway/server.mjs
+ExecStart=${NODE_BIN} scripts/start-web.mjs
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
 Environment=MYCROBO_GATEWAY_PORT=4177
-Environment=MYCROBO_AUTH_ROLE=owner
 
 [Install]
 WantedBy=multi-user.target
@@ -148,9 +154,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable mycrobo
 sudo systemctl restart mycrobo
 
-sleep 2
+sleep 4
 echo "Verifying local gateway status..."
-curl -s -o /dev/null -w "Gateway HTTP Status: %{http_code}\n" http://127.0.0.1:4177/api/v1/status || true
+curl -s http://127.0.0.1:4177/api/v1/status || true
+echo ""
 
 echo "=========================================="
 echo "  Deployment Complete!                   "
