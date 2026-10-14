@@ -44,7 +44,7 @@ test("hosted authentication fails closed before the private app can start", () =
   assert.equal(webAuthConfigurationMode(200, { authMode: "supabase" }), "blocked");
   assert.equal(webAuthConfigurationMode(200, { authMode: "local-or-access" }), "access");
   assert.equal(webAuthConfigurationMode(404, {}), "blocked");
-  for (const context of [{ nativeDesktop: true }, { origin: "http://127.0.0.1:4177" }, { origin: "http://localhost:4177" }, { origin: "http://3.26.156.50" }]) {
+  for (const context of [{ nativeDesktop: true }, { origin: "http://127.0.0.1:4177" }, { origin: "http://localhost:4177" }, { origin: "http://3.26.156.50" }, { origin: "http://mycrobo.com" }, { origin: "http://www.mycrobo.com" }]) {
     assert.equal(webAuthConfigurationMode(404, {}, context), "not-applicable");
     assert.equal(webAuthConfigurationMode(200, { authMode: "local-or-access" }, context), "access");
   }

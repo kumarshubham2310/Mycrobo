@@ -45,7 +45,8 @@ export function localWebAuthContext({ nativeDesktop = false, origin = "" } = {})
     const url = new URL(origin);
     const isIp = /^(?:\d{1,3}\.){3}\d{1,3}$/u.test(url.hostname) || url.hostname.startsWith("[");
     const isLocalhost = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-    return ["http:", "https:"].includes(url.protocol) && (isLocalhost || isIp)
+    const isMyCroboDomain = url.hostname === "mycrobo.com" || url.hostname.endsWith(".mycrobo.com");
+    return ["http:", "https:"].includes(url.protocol) && (isLocalhost || isIp || isMyCroboDomain)
       && !url.username && !url.password;
   } catch { return false; }
 }
