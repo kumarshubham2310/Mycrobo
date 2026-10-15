@@ -26,6 +26,13 @@ import { authorizeGatewayCapability, normalizeGatewayRole, roleAllowsGatewayCapa
 import { AUTO_SEND_BUILD_CERTIFICATION_CONTRACT, autoSendBuildCertificationDigest, createGatewayAutoSendRuntime } from "./auto-send-gateway-runtime.mjs";
 import { createBridgeAutoSendDeliveryBoundary } from "./auto-send-bridge-delivery.mjs";
 import { AUTO_SEND_DURABLE_STORAGE_BINDING, AUTO_SEND_SAFETY_BINDING_CONTRACT, readAutoSendHostBootstrapFromFd } from "./auto-send-host-bootstrap.mjs";
+import { createRequire } from "node:module";
+
+const esmRequire = createRequire(import.meta.url);
+let ControlPlane = null;
+try {
+  ({ ControlPlane } = esmRequire("../../desktop/electron/control-plane.cjs"));
+} catch {}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const clientRoot = join(here, "..", "..", "apps", "client");
@@ -223,6 +230,17 @@ export async function refreshGoogleWhenStale({ googleConnector, sync, nowMs = Da
 export function createGatewayServer(options = {}) {
   const userStateStore = options.userStateStore || createUserStateStoreFromEnv();
   const userDataDir = options.userDataDir ?? process.env.MYCROBO_USER_DATA_DIR ?? "";
+  const controlPlaneDir = options.controlPlaneDir
+    || process.env.MYCROBO_CONTROL_PLANE_DIR
+    || (userDataDir ? dirname(userDataDir) : null);
+  let controlPlane = options.controlPlane || null;
+  if (!controlPlane && ControlPlane && controlPlaneDir) {
+    try {
+      controlPlane = new ControlPlane(controlPlaneDir);
+    } catch {
+      controlPlane = null;
+    }
+  }
   const tenantId = String(options.tenantId ?? process.env.MYCROBO_TENANT_ID ?? "").trim();
   const authenticatedUserId = String(options.authenticatedUserId ?? process.env.MYCROBO_AUTH_USER_ID ?? "").trim();
   const trustedBuildVersion = String(options.buildVersion ?? process.env.MYCROBO_BUILD_VERSION ?? "development").trim().slice(0, 120) || "development";
@@ -823,7 +841,91 @@ export function createGatewayServer(options = {}) {
     response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      auditedPath = url.pathname;
+      function extractBearerToken(req) {
+        const auth = String(req.headers.authorization || "");
+        if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+        return "";
+      }
+
+      function callerSession(req) {
+        if (!controlPlane) return { authenticated: true, isOwner: true, tenantId };
+        const token = extractBearerToken(req);
+        if (!token) return { authenticated: false, isOwner: false, tenantId: null, session: null };
+        try {
+          const session = controlPlane.sessionFromToken(token);
+          if (!session) return { authenticated: false, isOwner: false, tenantId: null, session: null };
+          const isOwner = session.user?.platformAdmin === true || session.tenant?.id === tenantId;
+          return { authenticated: true, isOwner, tenantId: session.tenant?.id, session };
+        } catch {
+          return { authenticated: false, isOwner: false, tenantId: null, session: null };
+        }
+      }
+
+      if (url.pathname.startsWith("/api/v1/auth/")) {
+        if (url.pathname === "/api/v1/auth/status") {
+          if (request.method !== "GET") return json(response, 405, { error: "Use GET for auth status." });
+          if (!controlPlane) {
+            return json(response, 200, { authenticated: true, bootstrapRequired: false, user: null, tenant: null });
+          }
+          const caller = callerSession(request);
+          const cpStatus = controlPlane.status();
+          return json(response, 200, {
+            authenticated: caller.authenticated,
+            bootstrapRequired: cpStatus.bootstrapRequired,
+            user: caller.session?.user || null,
+            tenant: caller.session?.tenant || null,
+          });
+        }
+        if (url.pathname === "/api/v1/auth/signup") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign up." });
+          if (!controlPlane) return json(response, 500, { error: "Control plane is not initialized." });
+          try {
+            const input = await readJSON(request, 16_384);
+            const cpStatus = controlPlane.status();
+            let created;
+            if (cpStatus.bootstrapRequired) {
+              created = controlPlane.bootstrap({
+                email: input.email,
+                displayName: input.displayName,
+                password: input.password,
+                workspaceName: input.workspaceName || input.tenantName || "Primary workspace",
+                importedTenants: [{ id: tenantId || "tenant-0000000000000001", name: "WhatsApp Workspace" }],
+              });
+            } else {
+              created = controlPlane.register({
+                email: input.email,
+                displayName: input.displayName,
+                password: input.password,
+                workspaceName: input.workspaceName || input.tenantName,
+              });
+            }
+            return json(response, 200, { authenticated: true, token: created.token, session: created.session });
+          } catch (err) {
+            return json(response, 400, { error: err instanceof Error ? err.message : "Registration failed." });
+          }
+        }
+        if (url.pathname === "/api/v1/auth/login") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign in." });
+          if (!controlPlane) return json(response, 500, { error: "Control plane is not initialized." });
+          try {
+            const input = await readJSON(request, 16_384);
+            const loggedIn = controlPlane.login({ email: input.email, password: input.password });
+            return json(response, 200, { authenticated: true, token: loggedIn.token, session: loggedIn.session });
+          } catch (err) {
+            return json(response, 401, { error: err instanceof Error ? err.message : "Sign in failed." });
+          }
+        }
+        if (url.pathname === "/api/v1/auth/logout") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign out." });
+          if (controlPlane) {
+            const token = extractBearerToken(request);
+            if (token) try { controlPlane.logout(token); } catch {}
+          }
+          return json(response, 200, { signedOut: true });
+        }
+        return json(response, 404, { error: "Unknown auth endpoint." });
+      }
+
       if (url.pathname === "/oauth/google/callback") {
         if (request.method !== "GET") return oauthResult(response, false, "Use the Google sign-in link from MyCrobo.");
         const callbackLimit = oauthCallbackLimiter.check(request);
@@ -1151,6 +1253,18 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/workspace") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for the workspace." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            return json(response, 200, {
+              tasks: [],
+              followUps: [],
+              pending: [],
+              decisions: [],
+              intelligence: { relationshipCount: 0 },
+            });
+          }
+        }
         return json(response, 200, await workspacePayload());
       }
       if (url.pathname === "/api/v1/preferences") {
@@ -1333,6 +1447,16 @@ export function createGatewayServer(options = {}) {
         }
       }
       if (url.pathname === "/api/v1/chats") {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (!caller.authenticated) {
+            return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
+          }
+          if (!caller.isOwner) {
+            const collection = url.searchParams.get("collection") ?? "active";
+            return json(response, 200, { collection, chats: [] });
+          }
+        }
         const collection = url.searchParams.get("collection") ?? "active";
         if (bridgeSource) return json(response, 200, { collection, chats: await enrichChats(await bridgeSource.listChats(collection)) });
         return json(response, 200, {
@@ -1346,6 +1470,16 @@ export function createGatewayServer(options = {}) {
         return json(response, 202, await bridgeSource.startImport());
       }
       if (url.pathname === "/api/v1/search") {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (!caller.authenticated) {
+            return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+          }
+          if (!caller.isOwner) {
+            const collection = url.searchParams.get("collection") === "archived" ? "archived" : "active";
+            return json(response, 200, { collection, chats: [] });
+          }
+        }
         const collection = url.searchParams.get("collection") === "archived" ? "archived" : "active";
         const query = (url.searchParams.get("q") || "").trim();
         if ([...query].length < 2) return json(response, 400, { error: "Enter at least two characters." });
@@ -1359,6 +1493,15 @@ export function createGatewayServer(options = {}) {
       }
       const chatMatch = /^\/api\/v1\/chats\/([^/]+)\/(messages|latest|draft|send-approval|send)$/u.exec(url.pathname);
       if (chatMatch) {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (!caller.authenticated) {
+            return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+          }
+          if (!caller.isOwner) {
+            return json(response, 404, { error: "Chat not found in your workspace." });
+          }
+        }
         const chatId = decodeURIComponent(chatMatch[1]);
         if (bridgeSource) {
           if (chatMatch[2] === "send-approval" || chatMatch[2] === "send") {
@@ -1685,6 +1828,7 @@ export function createGatewayServer(options = {}) {
     clearInterval(googleRefreshTimer);
     translator?.close?.();
     autoSendRuntime.close();
+    try { controlPlane?.close(); } catch {}
   });
   return server;
 }

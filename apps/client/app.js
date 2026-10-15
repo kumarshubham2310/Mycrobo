@@ -598,8 +598,13 @@ async function loadIntelligence(chat, epoch) {
   }
 }
 
-async function fetchJSON(url, options) {
-  const response = await fetch(url, options);
+async function fetchJSON(url, options = {}) {
+  const token = localStorage.getItem("mycrobo.web.auth_token.v1");
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+  const response = await fetch(url, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status}).`);
   return payload;
@@ -1518,85 +1523,61 @@ function setupDesktopAuthBridge() {
   }
 
   if (!window.mycroboDesktop) {
+    const TOKEN_KEY = "mycrobo.web.auth_token.v1";
     window.mycroboDesktop = {
       isWebBridge: true,
       async authStatus() {
-        const session = loadSession();
-        const accounts = loadAccounts();
-        return {
-          authenticated: Boolean(session?.user?.id),
-          bootstrapRequired: accounts.length === 0,
-          user: session?.user || null,
-          tenant: session?.tenant || null,
-        };
+        const token = localStorage.getItem(TOKEN_KEY);
+        try {
+          const res = await fetch("/api/v1/auth/status", {
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+          });
+          if (res.ok) {
+            return await res.json();
+          }
+        } catch {}
+        return { authenticated: false, bootstrapRequired: false, user: null, tenant: null };
       },
       async bootstrapOwner(input) {
-        const accounts = loadAccounts();
-        const email = String(input?.email || "").trim().toLowerCase();
-        const displayName = String(input?.displayName || "").trim();
-        const password = String(input?.password || "");
-        const tenantName = String(input?.workspaceName || input?.tenantName || "").trim() || (displayName ? `${displayName}'s workspace` : "My workspace");
-
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw new Error("Enter a valid email address.");
-        if (password.length < 12) throw new Error("Use at least 12 characters for your password.");
-        if (displayName.length < 2) throw new Error("Enter your name.");
-
-        if (accounts.some((a) => a.email.toLowerCase() === email)) {
-          throw new Error("An account with this email already exists. Sign in instead.");
-        }
-
-        const user = { id: `web-user-${Date.now()}`, email, displayName, platformAdmin: accounts.length === 0 };
-        const tenant = { id: `web-tenant-${Date.now()}`, name: tenantName, role: "owner" };
-        accounts.push({ ...user, password, tenant });
-        saveAccounts(accounts);
-
-        const session = { user, tenant, authenticated: true };
-        saveSession(session);
-        return { authenticated: true, session };
+        const res = await fetch("/api/v1/auth/signup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not create account.");
+        if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+        return { authenticated: true, session: data.session };
       },
       async signIn(input) {
-        const email = String(input?.email || "").trim().toLowerCase();
-        const password = String(input?.password || "");
-        if (!email) throw new Error("Enter your email address.");
-        if (!password) throw new Error("Enter your password.");
-
-        const accounts = loadAccounts();
-        let account = accounts.find((a) => a.email.toLowerCase() === email);
-
-        if (!account && accounts.length === 0 && (email === "user@example.com" || email === "shubham@example.com")) {
-          account = {
-            id: "web-user-default",
-            email,
-            displayName: email.split("@")[0].charAt(0).toUpperCase() + email.split("@")[0].slice(1),
-            password,
-            tenant: { id: "web-tenant-default", name: `${email.split("@")[0]}'s workspace`, role: "owner" },
-          };
-          accounts.push(account);
-          saveAccounts(accounts);
-        }
-
-        if (!account || account.password !== password) {
-          throw new Error("The email or password was incorrect. If you don't have an account yet, click Sign up.");
-        }
-
-        const session = {
-          user: { id: account.id, email: account.email, displayName: account.displayName, platformAdmin: Boolean(account.platformAdmin) },
-          tenant: account.tenant,
-          authenticated: true,
-        };
-        saveSession(session);
-        return { authenticated: true, session };
+        const res = await fetch("/api/v1/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Invalid email or password.");
+        if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+        return { authenticated: true, session: data.session };
       },
       async signOut() {
-        saveSession(null);
+        const token = localStorage.getItem(TOKEN_KEY);
+        try {
+          await fetch("/api/v1/auth/logout", {
+            method: "POST",
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+          });
+        } catch {}
+        localStorage.removeItem(TOKEN_KEY);
+        window.location.reload();
         return { signedOut: true };
       },
       async tenants() {
-        const session = loadSession();
-        if (!session?.tenant) return { tenants: [] };
+        const status = await this.authStatus();
+        if (!status?.tenant) return { tenants: [] };
         return {
-          tenants: [{ id: session.tenant.id, name: session.tenant.name, status: "active", selected: true, role: session.tenant.role || "owner" }],
-          activeTenantId: session.tenant.id,
+          tenants: [{ id: status.tenant.id, name: status.tenant.name, status: "active", selected: true, role: status.tenant.role || "owner" }],
+          activeTenantId: status.tenant.id,
         };
       },
       async openExternal(url) {
@@ -1695,6 +1676,7 @@ function setupDesktopAuthBridge() {
       overlay.classList.add("hidden");
       await loadAuthStatus();
       showToast(mode === "signup" ? "Account created! Welcome to MyCrobo." : "Signed in successfully.");
+      await loadChats({ force: true });
       await refreshStatus();
     } catch (error) {
       form.elements.password.value = "";
