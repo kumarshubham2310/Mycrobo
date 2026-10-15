@@ -20,13 +20,14 @@ fi
 echo "[1/6] Detected package manager: ${PKG_MGR}. Updating system packages..."
 if [ "$PKG_MGR" = "apt" ]; then
   sudo apt-get update -y
-  sudo apt-get install -y curl git ufw nginx golang-go
+  sudo apt-get install -y curl git ufw nginx golang-go certbot python3-certbot-nginx
 elif [ "$PKG_MGR" = "dnf" ]; then
   sudo dnf update -y
-  sudo dnf install -y curl git nginx golang
+  sudo dnf install -y curl git nginx golang certbot python3-certbot-nginx
 elif [ "$PKG_MGR" = "yum" ]; then
   sudo yum update -y
-  sudo yum install -y curl git nginx golang
+  sudo yum install -y epel-release || true
+  sudo yum install -y curl git nginx golang certbot python3-certbot-nginx
 fi
 
 # 2. Install Node.js 22 LTS (Required for node:sqlite & --experimental-strip-types)
@@ -65,12 +66,14 @@ server {
     listen 80 default_server;
     listen [::]:80 default_server;
 
-    server_name _;
+    server_name mycrobo.com www.mycrobo.com _;
     client_max_body_size 50M;
 
     location / {
         proxy_pass http://127.0.0.1:4177;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -89,12 +92,14 @@ server {
     listen 80 default_server;
     listen [::]:80 default_server;
 
-    server_name _;
+    server_name mycrobo.com www.mycrobo.com _;
     client_max_body_size 50M;
 
     location / {
         proxy_pass http://127.0.0.1:4177;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -110,12 +115,28 @@ sudo nginx -t
 sudo systemctl restart nginx
 sudo systemctl enable nginx
 
-# 5. Configure Firewall (if UFW present)
-echo "[5/6] Checking firewall configuration..."
+# 5. Configure Firewall & Automated SSL Certificate
+echo "[5/6] Checking firewall configuration & SSL certificate..."
 if command -v ufw >/dev/null 2>&1; then
-  sudo ufw allow OpenSSH
-  sudo ufw allow 'Nginx Full'
+  sudo ufw allow OpenSSH || true
+  sudo ufw allow 'Nginx Full' || true
+  sudo ufw allow 80/tcp || true
+  sudo ufw allow 443/tcp || true
   sudo ufw --force enable || true
+fi
+
+# Attempt automatic SSL certificate if mycrobo.com resolves to this machine
+if command -v certbot >/dev/null 2>&1; then
+  echo "Checking DNS resolution for automated SSL certificate..."
+  MY_IP=$(curl -s http://checkip.amazonaws.com || curl -s https://ifconfig.me || echo "")
+  RESOLVED_IP=$(dig +short mycrobo.com 2>/dev/null || getent ahosts mycrobo.com 2>/dev/null | awk '{print $1}' | head -n 1 || echo "")
+  if [ -n "$MY_IP" ] && [ "$MY_IP" = "$RESOLVED_IP" ]; then
+    echo "Domain mycrobo.com points to this server IP (${MY_IP}). Requesting Let's Encrypt SSL certificate..."
+    sudo certbot --nginx -d mycrobo.com --non-interactive --agree-tos --register-unsafely-without-email --redirect || true
+    sudo systemctl reload nginx || true
+  else
+    echo "Notice: mycrobo.com DNS does not match local IP yet (${RESOLVED_IP} vs ${MY_IP}). Skipping automatic Certbot."
+  fi
 fi
 
 # 6. Start MyCrobo Service with Systemd (Starts live bridge + gateway)
