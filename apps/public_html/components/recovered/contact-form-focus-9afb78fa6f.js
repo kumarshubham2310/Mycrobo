@@ -1,0 +1,190 @@
+"use client";
+const e = (value) => value;
+import * as tModule from "react";
+const t = () => tModule;
+import * as nModule from "react/jsx-runtime";
+const n = () => nModule;
+import { createLucideIcon as r } from "lucide-react";
+import { t as i } from "./arrow-right-BOiWlPow.js";
+import { t as a } from "./circle-check-C6Y1hkCw.js";
+var o = r(`loader-circle`, [
+    [`path`, { d: `M21 12a9 9 0 1 1-6.219-8.56`, key: `13zald` }],
+  ]),
+  s = r(`triangle-alert`, [
+    [
+      `path`,
+      {
+        d: `m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3`,
+        key: `wmoenq`,
+      },
+    ],
+    [`path`, { d: `M12 9v4`, key: `juzpu7` }],
+    [`path`, { d: `M12 17h.01`, key: `p32p05` }],
+  ]),
+  c = e(t(), 1),
+  l = n();
+function u(e, t) {
+  let n = e.get(t);
+  return typeof n == `string` ? n.trim() : ``;
+}
+function d() {
+  let [e, t] = (0, c.useState)(`idle`);
+  async function n(e) {
+    e.preventDefault();
+    let n = e.currentTarget,
+      r = new FormData(n),
+      i = u(r, `name`),
+      a = u(r, `email`),
+      o = u(r, `interest`),
+      s = u(r, `message`),
+      c = u(r, `_honey`);
+    t(`sending`);
+    try {
+      let e = await fetch(`https://formsubmit.co/ajax/info@mycrobo.com`, {
+          method: `POST`,
+          headers: {
+            "Content-Type": `application/json`,
+            Accept: `application/json`,
+          },
+          body: JSON.stringify({
+            name: i,
+            email: a,
+            interest: o,
+            message: s,
+            _honey: c,
+            _subject: `MyCrobo enquiry from ${i || `website visitor`}`,
+            _template: `table`,
+          }),
+        }),
+        r = await e.json(),
+        l = r.success === !0 || r.success === `true`;
+      if (!e.ok || !l) throw Error(`Message service unavailable`);
+      (t(`sent`), n.reset());
+    } catch {
+      t(`error`);
+    }
+  }
+  return (0, l.jsxs)(`form`, {
+    className: `contact-form`,
+    onSubmit: n,
+    children: [
+      (0, l.jsxs)(`label`, {
+        className: `form-honeypot`,
+        "aria-hidden": `true`,
+        children: [
+          (0, l.jsx)(`span`, { children: `Leave this empty` }),
+          (0, l.jsx)(`input`, {
+            name: `_honey`,
+            type: `text`,
+            tabIndex: -1,
+            autoComplete: `off`,
+          }),
+        ],
+      }),
+      (0, l.jsxs)(`div`, {
+        className: `form-row`,
+        children: [
+          (0, l.jsxs)(`label`, {
+            children: [
+              (0, l.jsx)(`span`, { children: `Your name` }),
+              (0, l.jsx)(`input`, {
+                name: `name`,
+                type: `text`,
+                autoComplete: `name`,
+                required: !0,
+                placeholder: `How should we address you?`,
+              }),
+            ],
+          }),
+          (0, l.jsxs)(`label`, {
+            children: [
+              (0, l.jsx)(`span`, { children: `Email address` }),
+              (0, l.jsx)(`input`, {
+                name: `email`,
+                type: `email`,
+                autoComplete: `email`,
+                required: !0,
+                placeholder: `you@example.com`,
+              }),
+            ],
+          }),
+        ],
+      }),
+      (0, l.jsxs)(`label`, {
+        children: [
+          (0, l.jsx)(`span`, { children: `What interests you most?` }),
+          (0, l.jsxs)(`select`, {
+            name: `interest`,
+            defaultValue: `Founder early access`,
+            children: [
+              (0, l.jsx)(`option`, { children: `Founder early access` }),
+              (0, l.jsx)(`option`, { children: `Design partnership` }),
+              (0, l.jsx)(`option`, { children: `Business collaboration` }),
+              (0, l.jsx)(`option`, { children: `Digital-twin vision` }),
+              (0, l.jsx)(`option`, { children: `Something else` }),
+            ],
+          }),
+        ],
+      }),
+      (0, l.jsxs)(`label`, {
+        children: [
+          (0, l.jsx)(`span`, {
+            children: `What keeps interrupting your work?`,
+          }),
+          (0, l.jsx)(`textarea`, {
+            name: `message`,
+            required: !0,
+            rows: 7,
+            placeholder: `Which recurring task or conversation pulls you away? Mention the channel and what must always need your approval. Please omit private messages.`,
+          }),
+        ],
+      }),
+      (0, l.jsxs)(`div`, {
+        className: `form-submit-row`,
+        children: [
+          (0, l.jsx)(`button`, {
+            className: `button`,
+            type: `submit`,
+            disabled: e === `sending`,
+            children:
+              e === `sending`
+                ? (0, l.jsxs)(l.Fragment, {
+                    children: [
+                      `Sending `,
+                      (0, l.jsx)(o, { className: `form-spinner`, size: 16 }),
+                    ],
+                  })
+                : (0, l.jsxs)(l.Fragment, {
+                    children: [`Send message `, (0, l.jsx)(i, { size: 16 })],
+                  }),
+          }),
+          (0, l.jsxs)(`p`, {
+            "aria-live": `polite`,
+            className: `form-status form-status-${e}`,
+            children: [
+              e === `sent` &&
+                (0, l.jsxs)(l.Fragment, {
+                  children: [
+                    (0, l.jsx)(a, { size: 15 }),
+                    ` Message sent directly to the MyCrobo team.`,
+                  ],
+                }),
+              e === `error` &&
+                (0, l.jsxs)(l.Fragment, {
+                  children: [
+                    (0, l.jsx)(s, { size: 15 }),
+                    ` We couldn't send this message. Please try again.`,
+                  ],
+                }),
+              (e === `idle` || e === `sending`) &&
+                (0, l.jsx)(l.Fragment, {
+                  children: `Sent via FormSubmit to info@mycrobo.com. Please do not include private chats.`,
+                }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+export { d as ContactForm };

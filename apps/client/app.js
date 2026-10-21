@@ -2825,6 +2825,15 @@ document.querySelector("#reconnect").addEventListener("click", () => {
 });
 document.querySelector("#connectionNotice")?.addEventListener("click", () => document.querySelector("#reconnect")?.click());
 
+const menuBtn = document.querySelector(".site-header .menu-button");
+const primaryNav = document.querySelector("#primary-navigation");
+if (menuBtn && primaryNav) {
+  menuBtn.addEventListener("click", () => {
+    const open = primaryNav.classList.toggle("nav-open");
+    menuBtn.setAttribute("aria-expanded", String(open));
+  });
+}
+
 setupDesktopAuthBridge();
 await loadAuthStatus();
 applyViewVisibility();

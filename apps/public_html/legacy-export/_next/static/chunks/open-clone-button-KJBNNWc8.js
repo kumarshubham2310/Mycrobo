@@ -1,0 +1,1 @@
+import{r as e}from"./framework-D_rUT4EX.js";var t=e();function n({children:e,className:n,onOpen:r}){return(0,t.jsx)(`button`,{className:n,type:`button`,onClick:()=>{r?.(),window.dispatchEvent(new Event(`mycrobo:open-clone`))},children:e})}export{n as OpenCloneButton};

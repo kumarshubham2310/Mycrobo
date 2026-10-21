@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "paths": { "@/*": ["./*"] },
+    "checkJs": false,
+    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "target": "es2022",
+    "allowJs": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["app/**/*.jsx", "components/**/*.jsx"]
+}

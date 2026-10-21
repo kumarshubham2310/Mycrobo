@@ -18,7 +18,7 @@ if (!existsSync(nodeExe)) {
 
 // Make sure Linux bridge binary is executable if present
 if (!isWin && existsSync(bridgeExe)) {
-  try { chmodSync(bridgeExe, 0o755); } catch {}
+  try { chmodSync(bridgeExe, 0o755); } catch { }
 }
 
 function freePort() {
@@ -56,7 +56,7 @@ function discoverDesktopTenant() {
         try {
           const dbFile = resolve(tenantPath, "messages.vault.db");
           if (existsSync(dbFile)) dbSize = statSync(dbFile).size;
-        } catch {}
+        } catch { }
         candidates.push({ tenantPath, tenantId: name, base, dbSize });
       }
 
@@ -109,11 +109,11 @@ function discoverDesktopTenant() {
         } catch (e) {
           console.warn("Could not unlock desktop tenant:", e.message);
         } finally {
-          try { unlinkSync(tempScript); } catch {}
-          try { unlinkSync(tempOut); } catch {}
+          try { unlinkSync(tempScript); } catch { }
+          try { unlinkSync(tempOut); } catch { }
         }
       }
-    } catch {}
+    } catch { }
   }
   return null;
 }
@@ -161,10 +161,10 @@ function cleanShutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   if (bridgeChild && !bridgeChild.killed) {
-    try { bridgeChild.kill(); } catch {}
+    try { bridgeChild.kill(); } catch { }
   }
   if (gatewayChild && !gatewayChild.killed) {
-    try { gatewayChild.kill(); } catch {}
+    try { gatewayChild.kill(); } catch { }
   }
 }
 
@@ -182,7 +182,7 @@ if (!existsSync(bridgeExe)) {
     if (existsSync(buildScript)) {
       execSync(`"${process.execPath}" "${buildScript}"`, { cwd: root, stdio: "inherit" });
       if (!isWin && existsSync(bridgeExe)) {
-        try { chmodSync(bridgeExe, 0o755); } catch {}
+        try { chmodSync(bridgeExe, 0o755); } catch { }
       }
     }
   } catch (err) {
@@ -202,32 +202,70 @@ if (existsSync(bridgeExe)) {
     "-parent-pid", String(process.pid),
   ];
 
+  function wireBridge(child) {
+    if (!child) return;
+    bridgeChild = child;
+    child.stdout?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge] ${msg}`);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge] ${msg}`);
+    });
+    child.on("exit", (code) => {
+      if (!shuttingDown && code !== 0) {
+        console.error(`Live bridge stopped with code ${code}.`);
+      }
+    });
+  }
+
   console.log(`Starting MyCrobo live WhatsApp bridge on 127.0.0.1:${bridgePort}...`);
-  bridgeChild = spawn(bridgeExe, bridgeArgs, {
-    cwd: root,
-    env: {
-      ...process.env,
-      MYCROBO_BRIDGE_TOKEN: bridgeToken,
-      MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  bridgeChild.stdout.on("data", (chunk) => {
-    const msg = chunk.toString().trim();
-    if (msg) console.log(`[Bridge] ${msg}`);
-  });
-
-  bridgeChild.stderr.on("data", (chunk) => {
-    const msg = chunk.toString().trim();
-    if (msg) console.log(`[Bridge] ${msg}`);
-  });
-
-  bridgeChild.on("exit", (code) => {
-    if (!shuttingDown && code !== 0) {
-      console.error(`Live bridge stopped with code ${code}.`);
+  try {
+    const directChild = spawn(bridgeExe, bridgeArgs, {
+      cwd: root,
+      env: {
+        ...process.env,
+        MYCROBO_BRIDGE_TOKEN: bridgeToken,
+        MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    wireBridge(directChild);
+    directChild.on("error", (err) => {
+      console.warn(`Direct bridge spawn failed (${err.message}). Trying via go run...`);
+      try {
+        const goBridge = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+          cwd: resolve(root, "services", "whatsapp-bridge"),
+          env: {
+            ...process.env,
+            MYCROBO_BRIDGE_TOKEN: bridgeToken,
+            MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        wireBridge(goBridge);
+      } catch (e) {
+        console.warn(`Go run bridge fallback failed: ${e.message}`);
+      }
+    });
+  } catch (err) {
+    console.warn(`Could not spawn bridge executable directly (${err.message}). Trying via go run...`);
+    try {
+      const goBridge = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+        cwd: resolve(root, "services", "whatsapp-bridge"),
+        env: {
+          ...process.env,
+          MYCROBO_BRIDGE_TOKEN: bridgeToken,
+          MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      wireBridge(goBridge);
+    } catch (e) {
+      console.warn(`Go run bridge fallback failed: ${e.message}`);
     }
-  });
+  }
 
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -241,7 +279,7 @@ if (existsSync(bridgeExe)) {
         console.log("Live WhatsApp bridge is ready!");
         break;
       }
-    } catch {}
+    } catch { }
     await new Promise((r) => setTimeout(r, 150));
   }
 

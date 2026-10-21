@@ -682,11 +682,18 @@ body.compact .message { padding:8px 11px; }
   inset: 0;
   z-index: 9999;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background: radial-gradient(circle at 10% 5%, #dff4e9 0, transparent 34%), #f5f8f6;
+  overflow-y: auto;
+}
+.authOverlay .authContentWrapper {
+  flex: 1;
   display: grid;
   place-items: center;
   padding: 32px 20px;
-  background: radial-gradient(circle at 10% 5%, #dff4e9 0, transparent 34%), #f5f8f6;
-  overflow-y: auto;
+  width: 100%;
 }
 .authOverlay.hidden {
   display: none !important;
@@ -859,5 +866,170 @@ body.compact .message { padding:8px 11px; }
     border-radius: 20px;
   }
 }
+
+/* Next.js Public Site Header & Navbar Integration */
+.site-header {
+  width: 100%;
+  z-index: 50;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  background: rgba(245, 244, 241, 0.94);
+  border-bottom: 1px solid rgba(37, 39, 43, 0.12);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: 72px;
+  padding: 0 5vw;
+  position: sticky;
+  top: 0;
+  box-shadow: 0 4px 20px rgba(37, 42, 45, 0.05);
+}
+
+.site-header .brand {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  width: auto;
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.site-header .brand img {
+  width: 142px;
+  height: auto;
+  display: block;
+  object-fit: contain;
+}
+
+.site-header nav {
+  gap: 28px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+}
+
+.site-header nav a {
+  color: #252a2d;
+  text-decoration: none;
+  padding: 18px 0;
+  position: relative;
+  transition: color 0.15s ease;
+}
+
+.site-header nav a:hover {
+  color: #294b43;
+}
+
+.site-header nav a::after {
+  content: "";
+  background: #294b43;
+  height: 2px;
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  right: 100%;
+  transition: right 0.22s ease;
+}
+
+.site-header nav a:hover::after,
+.site-header nav a.current::after {
+  right: 0;
+}
+
+.site-header .header-cta {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  background: #294b43;
+  color: #fff;
+  border: 1px solid #294b43;
+  box-shadow: 0 4px 14px rgba(41, 75, 67, 0.18);
+  transition: background 0.16s, transform 0.16s;
+}
+
+.site-header .header-cta:hover {
+  background: #1e3731;
+  color: #fff;
+}
+
+.site-header .menu-button {
+  display: none;
+  border: 1px solid #d9dddb;
+  width: 40px;
+  height: 40px;
+  color: #294b43;
+  background: #fff;
+  border-radius: 50%;
+  place-items: center;
+  padding: 0;
+  justify-self: end;
+}
+
+.site-header .mobile-clone-cta {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .site-header {
+    grid-template-columns: 1fr auto;
+    min-height: 64px;
+  }
+  .site-header nav {
+    display: none;
+    border: 1px solid #d9dddb;
+    background: #fffefa;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+    border-radius: 18px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 12px;
+    position: fixed;
+    top: 68px;
+    left: 16px;
+    right: 16px;
+    z-index: 100;
+  }
+  .site-header nav.nav-open {
+    display: flex;
+  }
+  .site-header nav a {
+    border-bottom: 1px solid #edf1ef;
+    padding: 14px 12px;
+  }
+  .site-header nav a::after {
+    display: none;
+  }
+  .site-header .header-cta {
+    display: none;
+  }
+  .site-header .mobile-clone-cta {
+    display: inline-flex;
+    background: #294b43;
+    color: #fff;
+    min-height: 44px;
+    border: 0;
+    border-radius: 12px;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+    font-weight: 750;
+    text-decoration: none;
+  }
+  .site-header .menu-button {
+    display: grid;
+  }
+}
+
 
 

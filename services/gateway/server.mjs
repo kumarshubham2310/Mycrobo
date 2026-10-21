@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1792,22 +1793,64 @@ export function createGatewayServer(options = {}) {
           sendAvailable: false,
         });
       }
-      const assetPath = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-      if (!/^(?:index\.html|app\.js|admin-presentation\.mjs|autonomy-presentation\.mjs|chat-presentation\.mjs|composer-safety\.mjs|media-presentation\.mjs|pairing-presentation\.mjs|pwa-register\.mjs|relay-device\.mjs|relay-protocol\.mjs|web-auth\.mjs|web-auth-contract\.mjs|web-session\.mjs|web-hosted\.mjs|service-worker\.js|manifest\.webmanifest|styles\.css|assets\/(?:mycrobo-(?:logo-master|mark|lockup)-v1\.png|mycrobo-app-v2-(?:192|512)\.png|mycrobo-app-v2\.ico))$/u.test(assetPath)) {
+      const siteRoot = join(here, "..", "..", "apps", "public_html", "out");
+      const rawPath = url.pathname.replace(/^\/+/u, "");
+      const normalizedPath = rawPath.replace(/\/+$/u, "");
+      const isPublicSiteRoute = /^(?:product(?:\/why-mycrobo)?|why-mycrobo|vision|contact|control)$/u.test(normalizedPath);
+      const isNextAsset = url.pathname.startsWith("/_next/");
+      const isPublicImage = url.pathname.startsWith("/images/");
+      const isPublicRootAsset = /^(?:mycrobo-logo.*\.webp|mycrobo-mark\.(?:png|webp)|mycrobo.*\.png|robots\.txt|sitemap\.xml)$/u.test(normalizedPath);
+
+      const isAppRoute = /^(?:app|login)$/u.test(normalizedPath);
+
+      let targetFile = null;
+      if (url.pathname === "/") {
+        targetFile = join(siteRoot, "index.html");
+      } else if (isAppRoute) {
+        targetFile = join(clientRoot, "index.html");
+      } else if (isPublicSiteRoute) {
+        const candidate1 = join(siteRoot, normalizedPath, "index.html");
+        const candidate2 = join(siteRoot, `${normalizedPath}.html`);
+        targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+      } else if (isNextAsset || isPublicImage || isPublicRootAsset) {
+        targetFile = join(siteRoot, rawPath);
+      } else {
+        const assetPath = url.pathname.slice(1);
+        if (!/^(?:index\.html|app\.js|admin-presentation\.mjs|autonomy-presentation\.mjs|chat-presentation\.mjs|composer-safety\.mjs|media-presentation\.mjs|pairing-presentation\.mjs|pwa-register\.mjs|relay-device\.mjs|relay-protocol\.mjs|web-auth\.mjs|web-auth-contract\.mjs|web-session\.mjs|web-hosted\.mjs|service-worker\.js|manifest\.webmanifest|styles\.css|assets\/(?:mycrobo-(?:logo-master|mark|lockup)-v1\.png|mycrobo-app-v2-(?:192|512)\.png|mycrobo-app-v2\.ico)|images\/.*)$/u.test(assetPath)) {
+          return json(response, 404, { error: "Not found." });
+        }
+        targetFile = join(clientRoot, assetPath);
+      }
+
+      let body;
+      try {
+        body = await readFile(targetFile);
+      } catch {
         return json(response, 404, { error: "Not found." });
       }
-      const body = await readFile(join(clientRoot, assetPath));
-      const mime = extname(assetPath) === ".css"
+
+      const ext = extname(targetFile).toLowerCase();
+      const mime = ext === ".css"
         ? "text/css; charset=utf-8"
-        : extname(assetPath) === ".webmanifest"
+        : ext === ".webmanifest"
           ? "application/manifest+json; charset=utf-8"
-        : [".js", ".mjs"].includes(extname(assetPath))
+        : [".js", ".mjs"].includes(ext)
           ? "text/javascript; charset=utf-8"
-          : extname(assetPath) === ".png"
-            ? "image/png"
-            : extname(assetPath) === ".ico"
-              ? "image/x-icon"
-          : "text/html; charset=utf-8";
+        : ext === ".png"
+          ? "image/png"
+        : ext === ".webp"
+          ? "image/webp"
+        : ext === ".svg"
+          ? "image/svg+xml"
+        : ext === ".ico"
+          ? "image/x-icon"
+        : ext === ".xml"
+          ? "application/xml"
+        : ext === ".json"
+          ? "application/json"
+        : ext === ".txt"
+          ? "text/plain; charset=utf-8"
+        : "text/html; charset=utf-8";
       response.writeHead(200, { "content-type": mime, "cache-control": "no-store" });
       response.end(body);
     } catch (error) {

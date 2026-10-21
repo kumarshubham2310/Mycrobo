@@ -28,7 +28,10 @@
     "cloud:web:deploy": "pnpm dlx wrangler@4 deploy --config infrastructure/cloudflare/wrangler.toml",
     "web:start": "node scripts/start-web.mjs",
     "start:demo": "node scripts/start-web.mjs",
-    "desktop:start": "node scripts/build-live-bridge.mjs --if-needed && electron desktop/electron/main.cjs"
+    "desktop:start": "node scripts/build-live-bridge.mjs --if-needed && electron desktop/electron/main.cjs",
+    "site:dev": "npm --prefix apps/public_html run dev",
+    "site:build": "npm --prefix apps/public_html run build",
+    "site:start": "npm --prefix apps/public_html start"
   },
   "devDependencies": {
     "electron": "44.5.1"

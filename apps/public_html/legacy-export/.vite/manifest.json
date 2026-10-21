@@ -1,0 +1,208 @@
+{
+  "_Icon-Bo9jbUr1.js": {
+    "file": "_next/static/chunks/Icon-Bo9jbUr1.js",
+    "name": "Icon",
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "_arrow-right-BOiWlPow.js": {
+    "file": "_next/static/chunks/arrow-right-BOiWlPow.js",
+    "name": "arrow-right",
+    "imports": [
+      "_createLucideIcon-CLApvFWr.js"
+    ]
+  },
+  "_brain-CrtOQYH7.js": {
+    "file": "_next/static/chunks/brain-CrtOQYH7.js",
+    "name": "brain",
+    "imports": [
+      "_createLucideIcon-CLApvFWr.js"
+    ]
+  },
+  "_circle-check-C6Y1hkCw.js": {
+    "file": "_next/static/chunks/circle-check-C6Y1hkCw.js",
+    "name": "circle-check",
+    "imports": [
+      "_createLucideIcon-CLApvFWr.js"
+    ]
+  },
+  "_createLucideIcon-CLApvFWr.js": {
+    "file": "_next/static/chunks/createLucideIcon-CLApvFWr.js",
+    "name": "createLucideIcon",
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_Icon-Bo9jbUr1.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "_framework-D_rUT4EX.js": {
+    "file": "_next/static/chunks/framework-D_rUT4EX.js",
+    "name": "framework",
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js"
+    ]
+  },
+  "_navigation-errors-By4dF-Cc.js": {
+    "file": "_next/static/chunks/navigation-errors-By4dF-Cc.js",
+    "name": "navigation-errors",
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "_rolldown-runtime-C60lm6uB.js": {
+    "file": "_next/static/chunks/rolldown-runtime-C60lm6uB.js",
+    "name": "rolldown-runtime"
+  },
+  "_x-OQkzKLZU.js": {
+    "file": "_next/static/chunks/x-OQkzKLZU.js",
+    "name": "x",
+    "imports": [
+      "_createLucideIcon-CLApvFWr.js"
+    ]
+  },
+  "components/attention-tabs.tsx": {
+    "file": "_next/static/chunks/attention-tabs-focus-9afb78fa6f.js",
+    "name": "attention-tabs",
+    "src": "components/attention-tabs.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_createLucideIcon-CLApvFWr.js",
+      "_circle-check-C6Y1hkCw.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "components/clone-preview.tsx": {
+    "file": "_next/static/chunks/clone-preview-focus-9afb78fa6f.js",
+    "name": "clone-preview",
+    "src": "components/clone-preview.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_createLucideIcon-CLApvFWr.js",
+      "_brain-CrtOQYH7.js",
+      "_x-OQkzKLZU.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "components/contact-form.tsx": {
+    "file": "_next/static/chunks/contact-form-focus-9afb78fa6f.js",
+    "name": "contact-form",
+    "src": "components/contact-form.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_createLucideIcon-CLApvFWr.js",
+      "_arrow-right-BOiWlPow.js",
+      "_circle-check-C6Y1hkCw.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "components/open-clone-button.tsx": {
+    "file": "_next/static/chunks/open-clone-button-XGzlfL5T.js",
+    "name": "open-clone-button",
+    "src": "components/open-clone-button.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "components/relationship-demo.tsx": {
+    "file": "_next/static/chunks/relationship-demo-focus-9afb78fa6f.js",
+    "name": "relationship-demo",
+    "src": "components/relationship-demo.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_createLucideIcon-CLApvFWr.js",
+      "_brain-CrtOQYH7.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "components/site-header.tsx": {
+    "file": "_next/static/chunks/site-header-focus-9afb78fa6f.js",
+    "name": "site-header",
+    "src": "components/site-header.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "virtual:vinext-app-browser-entry",
+      "components/open-clone-button.tsx",
+      "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/image.js",
+      "_createLucideIcon-CLApvFWr.js",
+      "_arrow-right-BOiWlPow.js",
+      "_x-OQkzKLZU.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/image.js": {
+    "file": "_next/static/chunks/image-focus-9afb78fa6f.js",
+    "name": "image",
+    "src": "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/image.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "virtual:vinext-app-browser-entry",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/internal/app-route-prefetch-policy.js": {
+    "file": "_next/static/chunks/app-route-prefetch-policy-focus-9afb78fa6f.js",
+    "name": "app-route-prefetch-policy",
+    "src": "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/internal/app-route-prefetch-policy.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "virtual:vinext-app-browser-entry"
+    ]
+  },
+  "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/layout-segment-context.js": {
+    "file": "_next/static/chunks/layout-segment-context-focus-9afb78fa6f.js",
+    "name": "layout-segment-context",
+    "src": "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/layout-segment-context.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "virtual:vinext-app-browser-entry",
+      "_framework-D_rUT4EX.js",
+      "_navigation-errors-By4dF-Cc.js"
+    ]
+  },
+  "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/streamed-icons.js": {
+    "file": "_next/static/chunks/streamed-icons-Krg5Wk5X.js",
+    "name": "streamed-icons",
+    "src": "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/streamed-icons.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_framework-D_rUT4EX.js"
+    ]
+  },
+  "virtual:vinext-app-browser-entry": {
+    "file": "_next/static/chunks/index-focus-9afb78fa6f.js",
+    "name": "index",
+    "src": "virtual:vinext-app-browser-entry",
+    "isEntry": true,
+    "imports": [
+      "_rolldown-runtime-C60lm6uB.js",
+      "_framework-D_rUT4EX.js",
+      "_navigation-errors-By4dF-Cc.js"
+    ],
+    "dynamicImports": [
+      "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/internal/app-route-prefetch-policy.js",
+      "_Icon-Bo9jbUr1.js",
+      "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/streamed-icons.js",
+      "virtual:vinext-app-browser-entry",
+      "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/layout-segment-context.js",
+      "components/attention-tabs.tsx",
+      "components/site-header.tsx",
+      "components/clone-preview.tsx",
+      "node_modules/.pnpm/vinext@1.0.0-beta.5_@vitejs_00faf19e5ba4318f3329433d3b787334/node_modules/vinext/dist/shims/image.js",
+      "components/relationship-demo.tsx",
+      "components/open-clone-button.tsx",
+      "components/contact-form.tsx"
+    ]
+  }
+}
