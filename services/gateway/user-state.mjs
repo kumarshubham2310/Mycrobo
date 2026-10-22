@@ -865,7 +865,7 @@ export class SqliteUserStateStore extends FileUserStateStore {
       return normalized;
     } catch (error) {
       if (transactionOpen) {
-        try { legacy.exec("ROLLBACK"); } catch {}
+        try { legacy.exec("ROLLBACK"); } catch { }
       }
       throw error;
     } finally {
@@ -931,7 +931,7 @@ export class SqliteUserStateStore extends FileUserStateStore {
         .run(serialized, new Date().toISOString());
       database.exec("COMMIT");
     } catch (error) {
-      try { database.exec("ROLLBACK"); } catch {}
+      try { database.exec("ROLLBACK"); } catch { }
       throw error;
     }
   }

@@ -1793,7 +1793,9 @@ export function createGatewayServer(options = {}) {
           sendAvailable: false,
         });
       }
-      const siteRoot = join(here, "..", "..", "apps", "public_html", "out");
+      const outSiteRoot = join(here, "..", "..", "apps", "public_html", "out");
+      const legacySiteRoot = join(here, "..", "..", "apps", "public_html", "legacy-export");
+      const siteRoot = existsSync(join(outSiteRoot, "index.html")) ? outSiteRoot : legacySiteRoot;
       const rawPath = url.pathname.replace(/^\/+/u, "");
       const normalizedPath = rawPath.replace(/\/+$/u, "");
       const isPublicSiteRoute = /^(?:product(?:\/why-mycrobo)?|why-mycrobo|vision|contact|control)$/u.test(normalizedPath);
@@ -1805,15 +1807,22 @@ export function createGatewayServer(options = {}) {
 
       let targetFile = null;
       if (url.pathname === "/") {
-        targetFile = join(siteRoot, "index.html");
+        const candidate1 = join(siteRoot, "index.html");
+        const candidate2 = join(legacySiteRoot, "index.html");
+        const candidate3 = join(clientRoot, "index.html");
+        targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : candidate3);
       } else if (isAppRoute) {
         targetFile = join(clientRoot, "index.html");
       } else if (isPublicSiteRoute) {
         const candidate1 = join(siteRoot, normalizedPath, "index.html");
         const candidate2 = join(siteRoot, `${normalizedPath}.html`);
-        targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+        const candidate3 = join(legacySiteRoot, normalizedPath, "index.html");
+        const candidate4 = join(legacySiteRoot, `${normalizedPath}.html`);
+        targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : (existsSync(candidate3) ? candidate3 : candidate4));
       } else if (isNextAsset || isPublicImage || isPublicRootAsset) {
-        targetFile = join(siteRoot, rawPath);
+        const candidate1 = join(siteRoot, rawPath);
+        const candidate2 = join(legacySiteRoot, rawPath);
+        targetFile = existsSync(candidate1) ? candidate1 : candidate2;
       } else {
         const assetPath = url.pathname.slice(1);
         if (!/^(?:index\.html|app\.js|admin-presentation\.mjs|autonomy-presentation\.mjs|chat-presentation\.mjs|composer-safety\.mjs|media-presentation\.mjs|pairing-presentation\.mjs|pwa-register\.mjs|relay-device\.mjs|relay-protocol\.mjs|web-auth\.mjs|web-auth-contract\.mjs|web-session\.mjs|web-hosted\.mjs|service-worker\.js|manifest\.webmanifest|styles\.css|assets\/(?:mycrobo-(?:logo-master|mark|lockup)-v1\.png|mycrobo-app-v2-(?:192|512)\.png|mycrobo-app-v2\.ico)|images\/.*)$/u.test(assetPath)) {
