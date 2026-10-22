@@ -1798,27 +1798,45 @@ export function createGatewayServer(options = {}) {
       const siteRoot = existsSync(join(outSiteRoot, "index.html")) ? outSiteRoot : legacySiteRoot;
       const rawPath = url.pathname.replace(/^\/+/u, "");
       const normalizedPath = rawPath.replace(/\/+$/u, "");
-      const isPublicSiteRoute = /^(?:product(?:\/why-mycrobo)?|why-mycrobo|vision|contact|control)$/u.test(normalizedPath);
+      const isRscRequest = Boolean(
+        rawPath.endsWith(".rsc") ||
+        url.searchParams.has("_rsc") ||
+        request.headers.accept?.includes("text/x-component")
+      );
+      const cleanPath = normalizedPath.replace(/\.rsc$/u, "");
+      const isPublicSiteRoute = /^(?:product(?:\/why-mycrobo)?|why-mycrobo|vision|contact|control)$/u.test(cleanPath);
       const isNextAsset = url.pathname.startsWith("/_next/");
       const isPublicImage = url.pathname.startsWith("/images/");
       const isPublicRootAsset = /^(?:mycrobo-logo.*\.webp|mycrobo-mark\.(?:png|webp)|mycrobo.*\.png|robots\.txt|sitemap\.xml)$/u.test(normalizedPath);
 
-      const isAppRoute = /^(?:app|login)$/u.test(normalizedPath);
+      const isAppRoute = !isRscRequest && /^(?:app|login)$/u.test(normalizedPath);
 
       let targetFile = null;
-      if (url.pathname === "/") {
-        const candidate1 = join(siteRoot, "index.html");
-        const candidate2 = join(legacySiteRoot, "index.html");
-        const candidate3 = join(clientRoot, "index.html");
-        targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : candidate3);
+      if (url.pathname === "/" || normalizedPath === "index.rsc") {
+        if (isRscRequest) {
+          const candidate1 = join(siteRoot, "index.rsc");
+          const candidate2 = join(legacySiteRoot, "index.rsc");
+          targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+        } else {
+          const candidate1 = join(siteRoot, "index.html");
+          const candidate2 = join(legacySiteRoot, "index.html");
+          const candidate3 = join(clientRoot, "index.html");
+          targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : candidate3);
+        }
       } else if (isAppRoute) {
         targetFile = join(clientRoot, "index.html");
       } else if (isPublicSiteRoute) {
-        const candidate1 = join(siteRoot, normalizedPath, "index.html");
-        const candidate2 = join(siteRoot, `${normalizedPath}.html`);
-        const candidate3 = join(legacySiteRoot, normalizedPath, "index.html");
-        const candidate4 = join(legacySiteRoot, `${normalizedPath}.html`);
-        targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : (existsSync(candidate3) ? candidate3 : candidate4));
+        if (isRscRequest) {
+          const candidate1 = join(siteRoot, `${cleanPath}.rsc`);
+          const candidate2 = join(legacySiteRoot, `${cleanPath}.rsc`);
+          targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+        } else {
+          const candidate1 = join(siteRoot, cleanPath, "index.html");
+          const candidate2 = join(siteRoot, `${cleanPath}.html`);
+          const candidate3 = join(legacySiteRoot, cleanPath, "index.html");
+          const candidate4 = join(legacySiteRoot, `${cleanPath}.html`);
+          targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : (existsSync(candidate3) ? candidate3 : candidate4));
+        }
       } else if (isNextAsset || isPublicImage || isPublicRootAsset) {
         const candidate1 = join(siteRoot, rawPath);
         const candidate2 = join(legacySiteRoot, rawPath);
@@ -1839,7 +1857,9 @@ export function createGatewayServer(options = {}) {
       }
 
       const ext = extname(targetFile).toLowerCase();
-      const mime = ext === ".css"
+      const mime = ext === ".rsc" || (isRscRequest && ext !== ".json" && ext !== ".js" && ext !== ".css" && ext !== ".png" && ext !== ".webp" && ext !== ".svg")
+        ? "text/x-component; charset=utf-8"
+        : ext === ".css"
         ? "text/css; charset=utf-8"
         : ext === ".webmanifest"
           ? "application/manifest+json; charset=utf-8"

@@ -89,6 +89,8 @@ function updateCss() {
   }
 }
 
+import vm from "node:vm";
+
 // 3. Update JS Chunks for React hydration
 function updateChunks() {
   if (!readdirSync(chunksDir)) return;
@@ -100,27 +102,33 @@ function updateChunks() {
       console.log("Updated open-clone-button chunk:", entry);
     } else if (entry.startsWith("site-header-") && entry.endsWith(".js")) {
       let content = readFileSync(full, "utf8");
-
-      // Replace header-actions or old single button with clean Meet MyCrobo (button) + Login (link)
-      const isFn = content.includes("function m(){") && content.includes("var u=i(`menu`");
-      const jsx = isFn ? "f" : "d";
-
-      const headerActionsJs = `(\`div\`,{className:\`header-actions\`,style:{gridColumn:3,justifySelf:\`end\`,display:\`inline-flex\`,alignItems:\`center\`,gap:\`10px\`},children:[(0,${jsx}.jsx)(\`button\`,{type:\`button\`,className:\`button button-small\`,style:{cursor:\`pointer\`,textDecoration:\`none\`,display:\`inline-flex\`,alignItems:\`center\`,background:\`transparent\`,border:\`1.5px solid rgba(20,40,29,0.3)\`,color:\`#14281d\`,padding:\`0 16px\`,minHeight:\`38px\`,borderRadius:\`9999px\`,fontSize:\`13px\`,fontWeight:\`600\`,whiteSpace:\`nowrap\`},onClick:()=>{window.dispatchEvent(new CustomEvent(\`mycrobo:open-clone\`))},children:\`Meet MyCrobo\`}),(0,${jsx}.jsxs)(\`a\`,{href:\`/login\`,className:\`button button-small header-cta\`,style:{textDecoration:\`none\`,display:\`inline-flex\`,alignItems:\`center\`,background:\`#14281d\`,color:\`#ffffff\`,padding:\`0 18px\`,minHeight:\`38px\`,borderRadius:\`9999px\`,fontSize:\`13px\`,fontWeight:\`700\`,whiteSpace:\`nowrap\`},children:[\`Login \`,(0,${jsx}.jsx)(a,{size:14})]})]})`;
-
-      // Match either existing header-actions or old button
-      const oldHeaderActions = /\(`div`,\{className:`header-actions`[\s\S]*?children:\[[\s\S]*?\]\}\)/;
-      const oldSingleButton = /\(s,\{className:`button button-small header-cta`,children:\[`Login `,[\s\S]*?\]\}\)/;
-
       let changed = false;
-      if (oldHeaderActions.test(content)) {
-        content = content.replace(oldHeaderActions, headerActionsJs);
+
+      // Replace mobile CTA
+      const mobileRegex = /\(0,\s*([a-z])\.jsxs\)\(s,\s*\{className:`mobile-clone-cta`[\s\S]*?,\(0,\s*[a-z]\.jsx\)\(a,\s*\{size:15\}\)\]\}\)/g;
+      if (mobileRegex.test(content)) {
+        content = content.replace(mobileRegex, (match, jsx) => {
+          return `(0,${jsx}.jsxs)(\`a\`,{className:\`mobile-clone-cta\`,href:\`/login\`,onClick:()=>t(!1),children:[\`Login \`,(0,${jsx}.jsx)(a,{size:15})]})`;
+        });
         changed = true;
-      } else if (oldSingleButton.test(content)) {
-        content = content.replace(oldSingleButton, headerActionsJs);
+      }
+
+      // Replace header CTA
+      const headerRegex = /\(0,\s*([a-z])\.jsxs\)\(s,\s*\{className:`button button-small header-cta`[\s\S]*?,\(0,\s*[a-z]\.jsx\)\(a,\s*\{size:15\}\)\]\}\)/g;
+      if (headerRegex.test(content)) {
+        content = content.replace(headerRegex, (match, jsx) => {
+          return `(0,${jsx}.jsxs)(\`div\`,{className:\`header-actions\`,style:{gridColumn:3,justifySelf:\`end\`,display:\`inline-flex\`,alignItems:\`center\`,gap:\`10px\`},children:[(0,${jsx}.jsx)(\`button\`,{type:\`button\`,className:\`button button-small\`,style:{cursor:\`pointer\`,textDecoration:\`none\`,display:\`inline-flex\`,alignItems:\`center\`,background:\`transparent\`,border:\`1.5px solid rgba(20,40,29,0.3)\`,color:\`#14281d\`,padding:\`0 16px\`,minHeight:\`38px\`,borderRadius:\`9999px\`,fontSize:\`13px\`,fontWeight:\`600\`,whiteSpace:\`nowrap\`},onClick:()=>{window.dispatchEvent(new CustomEvent(\`mycrobo:open-clone\`))},children:\`Meet MyCrobo\`}),(0,${jsx}.jsxs)(\`a\`,{href:\`/login\`,className:\`button button-small header-cta\`,style:{textDecoration:\`none\`,display:\`inline-flex\`,alignItems:\`center\`,background:\`#14281d\`,color:\`#ffffff\`,padding:\`0 18px\`,minHeight:\`38px\`,borderRadius:\`9999px\`,fontSize:\`13px\`,fontWeight:\`700\`,whiteSpace:\`nowrap\`},children:[\`Login \`,(0,${jsx}.jsx)(a,{size:14})]})]})`;
+        });
         changed = true;
       }
 
       if (changed) {
+        // Syntax verification check
+        try {
+          new vm.SourceTextModule(content);
+        } catch (e) {
+          throw new Error(`Syntax error in chunk ${entry}: ${e.message}`);
+        }
         writeFileSync(full, content, "utf8");
         console.log("Updated site-header chunk:", entry);
       }
