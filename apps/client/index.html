@@ -10,6 +10,11 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/mycrobo-app-v2.ico" />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      if (window.location.pathname.startsWith('/login') || window.location.hash === '#authOverlay') {
+        document.documentElement.classList.add('force-auth');
+      }
+    </script>
   </head>
   <body>
     <a class="skipLink" href="#appContent">Skip to MyCrobo content</a>

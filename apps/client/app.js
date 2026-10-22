@@ -1569,7 +1569,7 @@ function setupDesktopAuthBridge() {
           });
         } catch {}
         localStorage.removeItem(TOKEN_KEY);
-        window.location.reload();
+        window.location.href = "/login";
         return { signedOut: true };
       },
       async tenants() {
@@ -1673,7 +1673,11 @@ function setupDesktopAuthBridge() {
       }
       form.elements.password.value = "";
       setPasswordVisibility(false);
+      document.documentElement.classList.remove("force-auth");
       overlay.classList.add("hidden");
+      if (window.location.pathname.startsWith("/login")) {
+        window.history.replaceState(null, "", "/app");
+      }
       await loadAuthStatus();
       showToast(mode === "signup" ? "Account created! Welcome to MyCrobo." : "Signed in successfully.");
       await loadChats({ force: true });
@@ -1688,8 +1692,13 @@ function setupDesktopAuthBridge() {
     }
   });
 
+  const isExplicitLogin = window.location.pathname.startsWith("/login") || window.location.hash === "#authOverlay";
+  if (isExplicitLogin) {
+    overlay.classList.remove("hidden");
+  }
+
   window.mycroboDesktop.authStatus().then((status) => {
-    if (!status.authenticated) {
+    if (!status.authenticated || isExplicitLogin) {
       if (status.bootstrapRequired) mode = "signup";
       updateModeUI();
       overlay.classList.remove("hidden");
@@ -1714,7 +1723,11 @@ async function loadAuthStatus() {
   updateAccountSurface();
   const overlay = document.querySelector("#authOverlay");
   if (overlay && window.mycroboDesktop?.isWebBridge) {
-    overlay.classList.toggle("hidden", state.auth?.authenticated === true);
+    if (window.location.pathname.startsWith("/login") || window.location.hash === "#authOverlay") {
+      overlay.classList.remove("hidden");
+    } else {
+      overlay.classList.toggle("hidden", state.auth?.authenticated === true);
+    }
   }
 }
 

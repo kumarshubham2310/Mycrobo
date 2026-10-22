@@ -698,6 +698,10 @@ body.compact .message { padding:8px 11px; }
 .authOverlay.hidden {
   display: none !important;
 }
+html.force-auth .authOverlay.hidden,
+.authOverlay:target {
+  display: flex !important;
+}
 .authOverlay .authCard {
   width: min(480px, 100%);
   padding: 40px;
