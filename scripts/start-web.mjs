@@ -307,7 +307,11 @@ const gatewayEnv = {
 };
 
 console.log(`Starting MyCrobo Web Gateway on http://localhost:${gatewayPort}...`);
-gatewayChild = spawn(nodeExe, ["--experimental-strip-types", resolve(root, "services", "gateway", "server.mjs")], {
+const supportsStripTypes = Number(process.versions.node.split(".")[0]) >= 22;
+const gatewayArgs = supportsStripTypes
+  ? ["--experimental-strip-types", resolve(root, "services", "gateway", "server.mjs")]
+  : [resolve(root, "services", "gateway", "server.mjs")];
+gatewayChild = spawn(nodeExe, gatewayArgs, {
   cwd: root,
   stdio: "inherit",
   env: gatewayEnv,
