@@ -938,6 +938,14 @@ body.compact .message { padding:8px 11px; }
   right: 0;
 }
 
+.site-header .header-actions {
+  grid-column: 3;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .site-header .header-cta {
   justify-self: end;
   display: inline-flex;
@@ -1008,7 +1016,8 @@ body.compact .message { padding:8px 11px; }
   .site-header nav a::after {
     display: none;
   }
-  .site-header .header-cta {
+  .site-header .header-cta,
+  .site-header .header-actions {
     display: none;
   }
   .site-header .mobile-clone-cta {

@@ -56,10 +56,11 @@ if [ ! -f bin/mycrobo-live-bridge ] || [ ! -s bin/mycrobo-live-bridge ]; then
 fi
 chmod +x bin/mycrobo-live-bridge 2>/dev/null || true
 
-# 3b. Ensure public website static export exists
-if [ ! -d "apps/public_html/out" ] && [ -d "apps/public_html/legacy-export" ]; then
-  echo "Setting up public website static export from legacy-export..."
-  cp -r apps/public_html/legacy-export apps/public_html/out
+# 3b. Ensure public website static export exists and is up-to-date
+if [ -d "apps/public_html/legacy-export" ]; then
+  echo "Syncing public website static export from legacy-export to out..."
+  mkdir -p apps/public_html/out
+  cp -r apps/public_html/legacy-export/. apps/public_html/out/
 fi
 
 # 4. Configure Nginx Reverse Proxy

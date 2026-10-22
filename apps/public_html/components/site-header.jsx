@@ -63,9 +63,14 @@ export function SiteHeader() {
           Sign In / App <ArrowRight size={15} />
         </Link>
       </nav>
-      <Link href="/app" className="button button-small header-cta">
-        Sign In / App <ArrowRight size={15} />
-      </Link>
+      <div className="header-actions" style={{ gridColumn: 3, justifySelf: "end", display: "inline-flex", alignItems: "center", gap: "10px" }}>
+        <Link href="/app" className="button button-small" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", background: "transparent", border: "1px solid rgba(20,40,29,0.35)", color: "#14281d", padding: "0 16px", minHeight: "38px", borderRadius: "999px", fontSize: "13px", fontWeight: "600", whiteSpace: "nowrap" }}>
+          Meet MyCrobo
+        </Link>
+        <Link href="/app" className="button button-small header-cta" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", background: "#14281d", color: "#ffffff", padding: "0 18px", minHeight: "38px", borderRadius: "999px", fontSize: "13px", fontWeight: "700", whiteSpace: "nowrap" }}>
+          Login <ArrowRight size={14} style={{ marginLeft: "4px" }} />
+        </Link>
+      </div>
       <button
         className="menu-button"
         type="button"
