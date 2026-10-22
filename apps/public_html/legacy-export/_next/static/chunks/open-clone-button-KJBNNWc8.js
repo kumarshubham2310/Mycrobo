@@ -1,1 +1,1 @@
-import{r as e}from"./framework-D_rUT4EX.js";var t=e();function n({children:e,className:n,onOpen:r}){return(0,t.jsx)(`button`,{className:n,type:`button`,onClick:()=>{r?.(),window.dispatchEvent(new Event(`mycrobo:open-clone`))},children:e})}export{n as OpenCloneButton};
+import{r as e}from"./framework-D_rUT4EX.js";var t=e();function n({children:e,className:n,onOpen:r}){return(0,t.jsx)(`a`,{href:`/app`,className:n,style:{textDecoration:`none`,display:`inline-flex`,alignItems:`center`},onClick:()=>{r?.()},children:e})}export{n as OpenCloneButton};
