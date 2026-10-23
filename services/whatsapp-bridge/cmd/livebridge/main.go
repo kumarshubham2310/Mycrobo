@@ -151,8 +151,13 @@ func main() {
 		response.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(response).Encode(map[string]any{"started": started, "consent_id": consent.ID})
 	})
-	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
+		if snapshot.State != "scan-required" || snapshot.Code == "" || (!snapshot.ExpiresAt.IsZero() && time.Now().UTC().After(snapshot.ExpiresAt)) {
+			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
+				snapshot = fresh
+			}
+		}
 		response.Header().Set("Cache-Control", "no-store")
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
 			http.Error(response, "pairing code is not available", http.StatusNotFound)

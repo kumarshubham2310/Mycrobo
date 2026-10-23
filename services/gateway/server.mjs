@@ -1149,10 +1149,24 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/pairing-qr") {
         if (!bridgeSource?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
-        const qr = await bridgeSource.pairingQR();
-        response.writeHead(200, { "content-type": qr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
-        response.end(qr.bytes);
-        return;
+        try {
+          const qr = await bridgeSource.pairingQR();
+          response.writeHead(200, { "content-type": qr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+          response.end(qr.bytes);
+          return;
+        } catch (err) {
+          if (bridgeSource?.useQRPairing || bridgeSource?.restartPairing) {
+            try {
+              if (bridgeSource.useQRPairing) await bridgeSource.useQRPairing();
+              else if (bridgeSource.restartPairing) await bridgeSource.restartPairing();
+              const freshQr = await bridgeSource.pairingQR();
+              response.writeHead(200, { "content-type": freshQr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+              response.end(freshQr.bytes);
+              return;
+            } catch {}
+          }
+          return json(response, 409, { error: err instanceof Error ? err.message : "Pairing code is unavailable." });
+        }
       }
       if (url.pathname === "/api/v1/pairing-phone") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to request a phone linking code." });
