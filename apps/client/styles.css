@@ -692,7 +692,7 @@ body.compact .message { padding:8px 11px; }
   flex: 1;
   display: grid;
   place-items: center;
-  padding: 32px 20px;
+  padding: 16px;
   width: 100%;
 }
 .authOverlay.hidden {
@@ -706,69 +706,73 @@ html.force-auth .authOverlay.hidden,
   display: flex !important;
 }
 .authOverlay .authCard {
-  width: min(480px, 100%);
-  padding: 40px;
+  width: min(390px, 100%);
+  padding: 22px 24px;
   border: 1px solid #cfe0d6;
-  border-radius: 28px;
+  border-radius: 18px;
   background: #fff;
-  box-shadow: 0 24px 70px #0e3f2c16;
+  box-shadow: 0 12px 40px #0e3f2c10;
 }
 .authOverlay .authCard > img {
-  width: 138px;
+  width: 98px;
   height: auto;
 }
 .authOverlay .eyebrow {
-  margin: 34px 0 8px;
+  margin: 10px 0 2px;
   color: #08794f;
-  font-size: .75rem;
+  font-size: .68rem;
   font-weight: 800;
-  letter-spacing: .12em;
+  letter-spacing: .09em;
   text-transform: uppercase;
 }
 .authOverlay h1 {
   margin: 0;
-  font-size: clamp(2rem, 7vw, 2.65rem);
-  line-height: 1.08;
-  letter-spacing: -.04em;
+  font-size: clamp(1.25rem, 4vw, 1.45rem);
+  line-height: 1.15;
+  letter-spacing: -.03em;
   color: #10251d;
 }
 .authOverlay .lede {
-  margin: 14px 0 28px;
+  margin: 4px 0 12px;
   color: #5f7068;
+  font-size: .82rem;
+  line-height: 1.3;
 }
 .authOverlay form,
 .authOverlay #bootstrapFields {
   display: grid;
-  gap: 16px;
+  gap: 10px;
 }
 .authOverlay label {
   display: grid;
-  gap: 7px;
+  gap: 3px;
   color: #2e463c;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: .8rem;
 }
 .authOverlay input {
   width: 100%;
-  min-height: 48px;
-  padding: 0 14px;
+  min-height: 38px;
+  padding: 0 10px;
   border: 1px solid #bdcec5;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #fbfdfc;
   color: inherit;
   font: inherit;
+  font-size: .88rem;
 }
 .authOverlay input:focus {
-  outline: 3px solid #bdf25e66;
+  outline: 2px solid #bdf25e66;
   border-color: #137d57;
 }
 .authOverlay button[type="submit"] {
-  min-height: 50px;
-  margin-top: 4px;
+  min-height: 38px;
+  margin-top: 2px;
   border: 0;
-  border-radius: 13px;
+  border-radius: 8px;
   background: #087a53;
   color: #fff;
-  font: 800 1rem/1 inherit;
+  font: 700 0.9rem/1 inherit;
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -786,25 +790,25 @@ html.force-auth .authOverlay.hidden,
   width: 100%;
 }
 .authOverlay .passwordWrapper input {
-  padding-right: 86px;
+  padding-right: 80px;
 }
 .authOverlay button.passwordToggle {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 4px;
   transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 36px;
+  gap: 4px;
+  min-height: 28px;
   margin: 0;
-  padding: 0 10px;
+  padding: 0 7px;
   border: 1px solid #c8dbd0;
-  border-radius: 9px;
+  border-radius: 6px;
   background: #eef7f2;
   color: #176a4c;
-  font: 700 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  font: 700 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
   cursor: pointer;
   transition: all .15s ease;
 }
@@ -813,8 +817,8 @@ html.force-auth .authOverlay.hidden,
   border-color: #83b49e;
 }
 .authOverlay button.passwordToggle:focus-visible {
-  outline: 3px solid #bdf25e66;
-  border-color: #137d57;
+  outline: 2px solid #137d57;
+  outline-offset: 1px;
 }
 .authOverlay button.passwordToggle[aria-pressed="true"] {
   background: #087a53;
@@ -826,23 +830,23 @@ html.force-auth .authOverlay.hidden,
   flex-shrink: 0;
 }
 .authOverlay .error {
-  min-height: 1.5em;
+  min-height: 1.1em;
   margin: 0;
   color: #a02d2d;
-  font-size: .9rem;
+  font-size: .8rem;
 }
 .authOverlay .authSwitch {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   text-align: center;
   color: #5f7068;
-  font-size: .92rem;
+  font-size: .82rem;
   font-weight: 500;
 }
 .authOverlay .authSwitchLink {
   color: #087a53;
   font-weight: 700;
   text-decoration: underline;
-  text-underline-offset: 3px;
+  text-underline-offset: 2px;
   cursor: pointer;
   transition: color .15s ease;
 }
@@ -856,12 +860,13 @@ html.force-auth .authOverlay.hidden,
   border-radius: 4px;
 }
 .authOverlay aside {
-  margin-top: 26px;
-  padding: 16px;
-  border-radius: 14px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
   background: #edf6f1;
   color: #52685e;
-  font-size: .88rem;
+  font-size: .75rem;
+  line-height: 1.3;
 }
 .authOverlay aside b {
   display: block;
@@ -869,8 +874,8 @@ html.force-auth .authOverlay.hidden,
 }
 @media (max-width: 520px) {
   .authOverlay .authCard {
-    padding: 28px 22px;
-    border-radius: 20px;
+    padding: 18px 16px;
+    border-radius: 14px;
   }
 }
 
