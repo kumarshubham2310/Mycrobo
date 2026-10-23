@@ -1547,6 +1547,11 @@ function setupDesktopAuthBridge() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not create account.");
         if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+        if (data.session?.user) {
+          const name = String(data.session.user.displayName || data.session.user.email?.split("@")[0] || "User");
+          localStorage.setItem("mycrobo.user.name", name);
+          localStorage.setItem("mycrobo.user.email", String(data.session.user.email || ""));
+        }
         return { authenticated: true, session: data.session };
       },
       async signIn(input) {
@@ -1558,6 +1563,11 @@ function setupDesktopAuthBridge() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Invalid email or password.");
         if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+        if (data.session?.user) {
+          const name = String(data.session.user.displayName || data.session.user.email?.split("@")[0] || "User");
+          localStorage.setItem("mycrobo.user.name", name);
+          localStorage.setItem("mycrobo.user.email", String(data.session.user.email || ""));
+        }
         return { authenticated: true, session: data.session };
       },
       async signOut() {
@@ -1569,7 +1579,10 @@ function setupDesktopAuthBridge() {
           });
         } catch {}
         localStorage.removeItem(TOKEN_KEY);
-        window.location.href = "/login";
+        localStorage.removeItem("mycrobo.user.name");
+        localStorage.removeItem("mycrobo.user.email");
+        localStorage.removeItem("mycrobo.web.session.v1");
+        window.location.replace("/login");
         return { signedOut: true };
       },
       async tenants() {
@@ -1702,6 +1715,9 @@ function setupDesktopAuthBridge() {
       if (status.bootstrapRequired) mode = "signup";
       updateModeUI();
       overlay.classList.remove("hidden");
+      if (!status.authenticated && window.location.pathname === "/app") {
+        window.location.replace("/login");
+      }
     } else {
       overlay.classList.add("hidden");
     }
@@ -1717,6 +1733,17 @@ async function loadAuthStatus() {
       user: status?.user || status?.session?.user || null,
       tenant: status?.tenant || status?.session?.tenant || null,
     };
+    if (state.auth?.authenticated && state.auth?.user) {
+      const name = String(state.auth.user.displayName || state.auth.user.email?.split("@")[0] || "User");
+      localStorage.setItem("mycrobo.user.name", name);
+      localStorage.setItem("mycrobo.user.email", String(state.auth.user.email || ""));
+    } else if (!state.auth?.authenticated) {
+      localStorage.removeItem("mycrobo.user.name");
+      localStorage.removeItem("mycrobo.user.email");
+      if (window.location.pathname === "/app") {
+        window.location.replace("/login");
+      }
+    }
   } catch {
     state.auth = null;
   }
@@ -2225,16 +2252,21 @@ document.querySelector("#openPlatformConsole")?.addEventListener("click", async 
   catch (error) { showToast(error instanceof Error ? error.message : "The platform console could not be opened."); }
 });
 document.querySelector("#signOut")?.addEventListener("click", async () => {
-  if (!window.confirm("Sign out of MyCrobo on this device? Your workspace data will remain encrypted and unchanged.")) return;
   try {
-    await window.mycroboDesktop?.signOut?.();
     liveEvents?.close();
     state.auth = null;
     state.admin = null;
-    updateAccountSurface();
-    window.location.reload();
+    localStorage.removeItem("mycrobo.web.auth_token.v1");
+    localStorage.removeItem("mycrobo.user.name");
+    localStorage.removeItem("mycrobo.user.email");
+    localStorage.removeItem("mycrobo.web.session.v1");
+    if (window.mycroboDesktop?.signOut) {
+      await window.mycroboDesktop.signOut().catch(() => {});
+    }
   } catch (error) {
-    showToast(error instanceof Error ? error.message : "Sign out could not be completed.");
+    console.error("Sign out error:", error);
+  } finally {
+    window.location.replace("/login");
   }
 });
 document.querySelector("#createTenantForm")?.addEventListener("submit", async (event) => {
