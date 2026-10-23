@@ -1856,6 +1856,10 @@ export function createGatewayServer(options = {}) {
         return json(response, 404, { error: "Not found." });
       }
 
+      if (normalizedPath === "login" && targetFile.endsWith("index.html")) {
+        body = Buffer.from(body.toString("utf8").replace('<html lang="en">', '<html lang="en" class="force-auth">'));
+      }
+
       const ext = extname(targetFile).toLowerCase();
       const mime = ext === ".rsc" || (isRscRequest && ext !== ".json" && ext !== ".js" && ext !== ".css" && ext !== ".png" && ext !== ".webp" && ext !== ".svg")
         ? "text/x-component; charset=utf-8"

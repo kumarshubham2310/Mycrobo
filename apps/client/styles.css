@@ -698,6 +698,9 @@ body.compact .message { padding:8px 11px; }
 .authOverlay.hidden {
   display: none !important;
 }
+html.force-auth .appShell {
+  display: none !important;
+}
 html.force-auth .authOverlay.hidden,
 .authOverlay:target {
   display: flex !important;

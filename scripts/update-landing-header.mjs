@@ -51,7 +51,7 @@ function walk(dir) {
       });
 
       // Update hero Meet MyCrobo button if present
-      content = content.replace(/<section class="home-hero[\s\S]*?<\/section>/u, (heroMatch) => {
+      content = content.replace(/<section class="(?:home-hero|hero)"[\s\S]*?<\/section>/u, (heroMatch) => {
         const updatedHero = heroMatch.replace(/<(?:a|button)[^>]*class="button"[^>]*>[\s\S]*?Meet MyCrobo[\s\S]*?<\/(?:a|button)>/u, () => {
           changed = true;
           return newHero;
