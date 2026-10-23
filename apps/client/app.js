@@ -2339,10 +2339,18 @@ document.querySelector("#toggleRelayPassword")?.addEventListener("click", (event
   event.currentTarget.setAttribute("aria-label", visible ? "Show password" : "Hide password");
   event.currentTarget.setAttribute("aria-pressed", String(!visible));
 });
-document.querySelector("#connectWhatsApp")?.addEventListener("click", () => {
+document.querySelector("#connectWhatsApp")?.addEventListener("click", async () => {
   state.forceSetup = true;
   state.connectionSetupDismissed = false;
   switchView("chats");
+  const currentPairing = state.lastStatus?.pairing;
+  if (currentPairing && (currentPairing.state === "expired" || currentPairing.state === "retryable-error")) {
+    try {
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
+      await refreshStatus();
+      return;
+    } catch {}
+  }
   renderSetup(state.lastStatus || { connectionState: "offline", pairing: { state: "unpaired" } });
 });
 document.querySelector("#logoutWhatsApp")?.addEventListener("click", () => void logoutWhatsApp());
@@ -2496,7 +2504,26 @@ function bindPairingTabs(status) {
 function renderPairingError(status, message) {
   setupPanel.dataset.mode = `pairing-error:${state.pairingMethod}`;
   setupPanel.innerHTML = `<div class="setupCard pairingCard"><span class="step">Connection needs attention</span><h1>WhatsApp could not create the code</h1><p>${escapeHtml(message)}</p><button type="button" id="retryPairing">Try again</button><button type="button" class="setupSecondary" id="returnToQR">Use QR code</button><small>No chat message was sent.</small></div>`;
-  document.querySelector("#retryPairing")?.addEventListener("click", () => { state.pairingShowEntry = true; delete setupPanel.dataset.mode; renderSetup(status); });
+  document.querySelector("#retryPairing")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Connecting…";
+    }
+    state.pairingShowEntry = true;
+    delete setupPanel.dataset.mode;
+    try {
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
+      await refreshStatus();
+    } catch {
+      try {
+        await fetchJSON("/api/v1/connect", { method: "POST" });
+        await refreshStatus();
+      } catch {
+        renderSetup(status);
+      }
+    }
+  });
   document.querySelector("#returnToQR")?.addEventListener("click", async () => {
     state.pairingMethod = "qr";
     state.pairingShowEntry = false;
@@ -2526,7 +2553,13 @@ function renderPairingRecovery(status, pairing) {
       delete setupPanel.dataset.mode;
       await refreshStatus();
     } catch (error) {
-      renderPairingError(status, error instanceof Error ? error.message : "WhatsApp could not start a fresh linking session.");
+      try {
+        await fetchJSON("/api/v1/connect", { method: "POST" });
+        delete setupPanel.dataset.mode;
+        await refreshStatus();
+      } catch (innerError) {
+        renderPairingError(status, innerError instanceof Error ? innerError.message : (error instanceof Error ? error.message : "WhatsApp could not start a fresh linking session."));
+      }
     }
   });
 }
