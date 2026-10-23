@@ -2891,7 +2891,7 @@ function refreshStatus(options = {}) {
   return promise;
 }
 
-document.querySelector("#reconnect").addEventListener("click", () => {
+document.querySelector("#reconnect").addEventListener("click", async () => {
   if (document.querySelector(".connectionCard")?.dataset.state === "service-unavailable") {
     void refreshStatus();
     return;
@@ -2899,6 +2899,14 @@ document.querySelector("#reconnect").addEventListener("click", () => {
   state.forceSetup = true;
   state.connectionSetupDismissed = false;
   switchView("chats");
+  const currentPairing = state.lastStatus?.pairing;
+  if (currentPairing && (currentPairing.state === "expired" || currentPairing.state === "retryable-error")) {
+    try {
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
+      await refreshStatus();
+      return;
+    } catch {}
+  }
   renderSetup(state.lastStatus || { connectionState: "offline", pairing: { state: "unpaired" } });
 });
 document.querySelector("#connectionNotice")?.addEventListener("click", () => document.querySelector("#reconnect")?.click());
