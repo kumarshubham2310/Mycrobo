@@ -851,14 +851,16 @@ export function createGatewayServer(options = {}) {
       function callerSession(req) {
         if (!controlPlane) return { authenticated: true, isOwner: true, tenantId };
         const token = extractBearerToken(req);
-        if (!token) return { authenticated: false, isOwner: false, tenantId: null, session: null };
+        if (!token) {
+          if (authenticatedRole === "owner") return { authenticated: true, isOwner: true, tenantId };
+          return { authenticated: false, isOwner: false, tenantId: null, session: null };
+        }
         try {
           const session = controlPlane.sessionFromToken(token);
           if (!session) return { authenticated: false, isOwner: false, tenantId: null, session: null };
           // Strict tenant isolation: user can only access this workspace if their session belongs to this workspace's tenant
           const isOwner = session.tenant?.id === tenantId
-            || (session.user?.platformAdmin === true && (!tenantId || tenantId === "tenant-0000000000000001"))
-            || session.tenant?.role === "owner";
+            || (session.user?.platformAdmin === true && (!tenantId || tenantId === "tenant-0000000000000001"));
           return { authenticated: true, isOwner, tenantId: session.tenant?.id || tenantId, session };
         } catch {
           return { authenticated: false, isOwner: false, tenantId: null, session: null };

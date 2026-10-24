@@ -117,6 +117,7 @@ __pycache__/
 *.orig
 *-wal
 *-shm
+bin/*.stale-*
 repair-backups/
 app-backup-*/
 package-backups/

@@ -34,7 +34,7 @@ import (
 )
 
 func init() {
-	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
+	waStore.SetOSInfo("Windows", [3]uint32{0, 1, 0})
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 }
 
