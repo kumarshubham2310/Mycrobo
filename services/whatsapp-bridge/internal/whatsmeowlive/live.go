@@ -342,6 +342,18 @@ func (l *Live) RestartPairing(ctx context.Context) (PairingSnapshot, error) {
 	l.pairMu.Lock()
 	defer l.pairMu.Unlock()
 	if l.client.Store.ID != nil {
+		l.mu.RLock()
+		currentState := l.state
+		l.mu.RUnlock()
+		if currentState == "reauth-required" || currentState == "account-verification-required" || currentState == "offline" {
+			l.pairMu.Unlock()
+			err := l.Logout(ctx)
+			l.pairMu.Lock()
+			if err != nil {
+				return PairingSnapshot{}, err
+			}
+			return l.Pairing(), nil
+		}
 		return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 	}
 	if err := l.restartPairingSession(ctx); err != nil {
@@ -365,7 +377,7 @@ func (l *Live) Logout(ctx context.Context) error {
 		return errors.New("this MyCrobo device is not currently linked")
 	}
 	if err := client.Logout(ctx); err != nil {
-		return fmt.Errorf("log out WhatsApp linked device: %w", err)
+		_ = err
 	}
 	replacement := whatsmeow.NewClient(l.container.NewDevice(), nil)
 	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })

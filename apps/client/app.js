@@ -1597,6 +1597,19 @@ function setupDesktopAuthBridge() {
         window.open(url, "_blank", "noopener,noreferrer");
         return { opened: true };
       },
+      async relinkWhatsApp() {
+        try {
+          await fetchJSON("/api/v1/integrations/whatsapp/logout", {
+            method: "POST",
+            headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+          });
+        } catch {}
+        await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => {});
+        await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+        delete setupPanel?.dataset?.mode;
+        await refreshStatus();
+        return { restarting: true };
+      },
     };
   }
 
@@ -2574,15 +2587,24 @@ function renderReauthenticationRecovery(status) {
   document.querySelector("#startRelink")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const errorNode = document.querySelector("#relinkError");
-    if (!window.mycroboDesktop?.relinkWhatsApp) {
-      errorNode.textContent = "This desktop build cannot prepare a fresh WhatsApp session.";
-      return;
-    }
     if (!window.confirm("Reconnect WhatsApp with a fresh QR code or phone code? The expired session will be preserved as a backup, and saved chats will not be deleted.")) return;
     button.disabled = true;
     button.textContent = "Preparing secure login…";
     try {
-      await window.mycroboDesktop.relinkWhatsApp();
+      if (typeof window.mycroboDesktop?.relinkWhatsApp === "function") {
+        await window.mycroboDesktop.relinkWhatsApp();
+        return;
+      }
+      try {
+        await fetchJSON("/api/v1/integrations/whatsapp/logout", {
+          method: "POST",
+          headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+        });
+      } catch {}
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => {});
+      await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+      delete setupPanel.dataset.mode;
+      await refreshStatus();
     } catch (error) {
       errorNode.textContent = error instanceof Error ? error.message : "WhatsApp reconnection could not be prepared.";
       button.disabled = false;
@@ -2605,15 +2627,24 @@ function renderAccountVerificationRecovery(status) {
   document.querySelector("#relinkOriginal")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const errorNode = document.querySelector("#accountVerificationError");
-    if (!window.mycroboDesktop?.relinkWhatsApp) {
-      errorNode.textContent = "This desktop build cannot prepare a fresh WhatsApp session.";
-      return;
-    }
     if (!window.confirm("Reconnect the WhatsApp account that originally owned this workspace? The unverified linked session will be preserved as a backup, and saved chats will not be deleted.")) return;
     button.disabled = true;
     button.textContent = "Preparing original-account login…";
     try {
-      await window.mycroboDesktop.relinkWhatsApp();
+      if (typeof window.mycroboDesktop?.relinkWhatsApp === "function") {
+        await window.mycroboDesktop.relinkWhatsApp();
+        return;
+      }
+      try {
+        await fetchJSON("/api/v1/integrations/whatsapp/logout", {
+          method: "POST",
+          headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+        });
+      } catch {}
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => {});
+      await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+      delete setupPanel.dataset.mode;
+      await refreshStatus();
     } catch (error) {
       errorNode.textContent = error instanceof Error ? error.message : "WhatsApp reconnection could not be prepared.";
       button.disabled = false;
