@@ -136,8 +136,23 @@ if (activeDesktopTenant) {
 } else {
   console.log("Starting web workspace mode...");
   const defaultBase = resolve(appDataRoot, "mycrobo-reboot");
-  tenantId = "tenant-0000000000000001";
-  userId = "user-000000000000000000000001";
+  let resolvedTenantId = "tenant-0000000000000001";
+  let resolvedUserId = "user-000000000000000000000001";
+  const cpDb = resolve(defaultBase, "control-plane.db");
+  if (existsSync(cpDb)) {
+    try {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(cpDb, { open: true, readOnly: true });
+      const row = db.prepare("SELECT t.id as tenant_id, m.user_id FROM tenants t JOIN memberships m ON m.tenant_id = t.id WHERE t.status = 'active' ORDER BY t.created_at LIMIT 1").get();
+      if (row?.tenant_id) {
+        resolvedTenantId = row.tenant_id;
+        if (row.user_id) resolvedUserId = row.user_id;
+      }
+      db.close();
+    } catch {}
+  }
+  tenantId = resolvedTenantId;
+  userId = resolvedUserId;
   tenantData = resolve(defaultBase, "web-tenant");
   mkdirSync(tenantData, { recursive: true });
 
