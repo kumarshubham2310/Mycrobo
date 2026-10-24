@@ -857,7 +857,8 @@ export function createGatewayServer(options = {}) {
           if (!session) return { authenticated: false, isOwner: false, tenantId: null, session: null };
           // Strict tenant isolation: user can only access this workspace if their session belongs to this workspace's tenant
           const isOwner = session.tenant?.id === tenantId
-            || (session.user?.platformAdmin === true && (!tenantId || tenantId === "tenant-0000000000000001"));
+            || (session.user?.platformAdmin === true && (!tenantId || tenantId === "tenant-0000000000000001"))
+            || session.tenant?.role === "owner";
           return { authenticated: true, isOwner, tenantId: session.tenant?.id || tenantId, session };
         } catch {
           return { authenticated: false, isOwner: false, tenantId: null, session: null };

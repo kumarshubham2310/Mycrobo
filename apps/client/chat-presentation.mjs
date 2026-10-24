@@ -116,8 +116,7 @@ export function shouldPresentConnectionSetup({ view, status, forceSetup = false,
   const pairingState = String(status?.pairing?.state || "");
   if (forceSetup || ACTIVE_PAIRING_STATES.has(pairingState)) return true;
   if (!hasSavedChats) return true;
-  if (setupDismissed) return false;
-  return ["reauth-required", "account-verification-required"].includes(String(status?.connectionState || ""));
+  return true;
 }
 
 export function conversationStatusPresentation(watermark, fallbackCount = 0) {

@@ -2360,16 +2360,17 @@ document.querySelector("#toggleRelayPassword")?.addEventListener("click", (event
 document.querySelector("#connectWhatsApp")?.addEventListener("click", async () => {
   state.forceSetup = true;
   state.connectionSetupDismissed = false;
+  state.pairingMethod = "qr";
+  delete setupPanel.dataset.mode;
   switchView("chats");
-  const currentPairing = state.lastStatus?.pairing;
-  if (currentPairing && (currentPairing.state === "expired" || currentPairing.state === "retryable-error")) {
-    try {
-      await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
-      await refreshStatus();
-      return;
-    } catch {}
-  }
-  renderSetup(state.lastStatus || { connectionState: "offline", pairing: { state: "unpaired" } });
+  setupPanel.innerHTML = '<div class="setupCard"><span class="step">Connecting WhatsApp</span><h1>Loading QR Code…</h1><p>Preparing a fresh WhatsApp QR code. Please scan with your phone.</p></div>';
+  setupPanel.classList.remove("hidden");
+  workspace.classList.add("hidden");
+  try {
+    await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
+  } catch {}
+  await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+  await refreshStatus();
 });
 document.querySelector("#logoutWhatsApp")?.addEventListener("click", () => void logoutWhatsApp());
 document.querySelector("#connectGoogle")?.addEventListener("click", () => void connectGoogle());
@@ -2417,18 +2418,13 @@ overviewList.addEventListener("toggle", (event) => {
 
 async function startImport() {
   const button = document.querySelector("#connectAll");
-  const consent = document.querySelector("#connectorRisk");
-  if (!consent?.checked) {
-    document.querySelector("#setupError").textContent = "Please confirm the connector disclosure first.";
-    return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Starting…";
   }
-  button.disabled = true;
-  button.textContent = "Starting…";
   state.forceSetup = true;
   try {
-    const response = await fetch("/api/v1/connect", { method: "POST", signal: AbortSignal.timeout(20_000) });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Connection could not start.");
+    await fetchJSON("/api/v1/connect", { method: "POST", signal: AbortSignal.timeout(20_000) });
     renderSetup({ connectionState: "connecting", pairing: { state: "preparing" } });
     await refreshStatus({ skipSavedChatProbe: true });
   } catch (error) {
@@ -2834,17 +2830,18 @@ function renderSetup(status) {
     return;
   }
   stopPairingClock();
-  if (setupPanel.dataset.mode === "consent") return;
-  setupPanel.dataset.mode = "consent";
-  delete setupPanel.dataset.qr;
-  setupPanel.innerHTML = `<div class="setupCard"><span class="step">Private personal workspace</span><h1>Connect WhatsApp</h1><p>This workspace keeps its own WhatsApp session, chats, settings, attachments and learned communication style. Nothing is shared with another workspace.</p><div class="setupTenant" id="setupTenantActions"></div><label class="consent consentCard"><input id="connectorRisk" type="checkbox" checked /><span><strong>I understand and approve</strong><small>I approve one local import for all active and archived chats in this workspace. The connector is unofficial and may carry account or service risk.</small></span></label><button id="connectAll">Show QR and phone login</button><p class="setupError" id="setupError"></p><small>Sync, analysis and drafting never send a chat message.</small></div>`;
-  void loadTenants(document.querySelector("#setupTenantActions"));
-  document.querySelector("#connectorRisk")?.addEventListener("change", (event) => {
-    const button = document.querySelector("#connectAll");
-    if (button) button.disabled = !event.currentTarget.checked;
-    document.querySelector("#setupError").textContent = "";
-  });
-  document.querySelector("#connectAll")?.addEventListener("click", () => void startImport());
+  if (setupPanel.dataset.mode !== "auto-starting-qr") {
+    setupPanel.dataset.mode = "auto-starting-qr";
+    setupPanel.innerHTML = '<div class="setupCard"><span class="step">Connecting WhatsApp</span><h1>Loading QR Code…</h1><p>Preparing a fresh WhatsApp QR code. Please scan with your phone.</p></div>';
+    void (async () => {
+      try {
+        await fetchJSON("/api/v1/pairing-restart", { method: "POST" });
+      } catch {}
+      await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+      delete setupPanel.dataset.mode;
+      await refreshStatus();
+    })();
+  }
 }
 
 async function savedChatsExist() {
