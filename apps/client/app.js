@@ -1957,22 +1957,27 @@ async function logoutWhatsApp() {
   if (!window.confirm("Log out this MyCrobo linked device from WhatsApp? Saved local chat history will remain, but live sync and sending will stop until you reconnect.")) return;
   const button = document.querySelector("#logoutWhatsApp");
   const status = document.querySelector("#whatsappStatus");
-  button.disabled = true;
-  button.textContent = "Logging out…";
-  status.textContent = "Removing this linked device securely…";
-  try {
-    await fetchJSON("/api/v1/integrations/whatsapp/logout", { method: "POST", headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" } });
-    state.forceSetup = true;
-    state.pairingMethod = "qr";
-    state.pairingShowEntry = false;
-    delete setupPanel.dataset.mode;
-    showToast("WhatsApp logged out. Saved local history was preserved.");
-    await refreshStatus();
-  } catch (error) {
-    status.textContent = error instanceof Error ? error.message : "WhatsApp could not be logged out.";
-    button.disabled = false;
-    button.textContent = "Log out WhatsApp";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Logging out…";
   }
+  if (status) status.textContent = "Removing this linked device securely…";
+  try {
+    await fetchJSON("/api/v1/integrations/whatsapp/logout", {
+      method: "POST",
+      headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+    });
+  } catch {}
+  await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => {});
+  await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => {});
+  state.forceSetup = true;
+  state.connectionSetupDismissed = false;
+  state.pairingMethod = "qr";
+  state.pairingShowEntry = false;
+  delete setupPanel.dataset.mode;
+  showToast("WhatsApp logged out. Preparing QR code to reconnect…");
+  switchView("chats");
+  await refreshStatus();
 }
 
 async function connectGoogle() {

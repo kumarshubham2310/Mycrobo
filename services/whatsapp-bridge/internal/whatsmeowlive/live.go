@@ -374,24 +374,43 @@ func (l *Live) Logout(ctx context.Context) error {
 	client := l.client
 	runCtx := l.runCtx
 	l.mu.RUnlock()
-	if client == nil || client.Store == nil || client.Store.ID == nil {
-		return errors.New("this MyCrobo device is not currently linked")
+	if client != nil {
+		client.Disconnect()
+		if client.Store != nil {
+			if client.Store.ID != nil {
+				_ = client.Logout(ctx)
+			}
+			_ = client.Store.Delete(ctx)
+		}
 	}
-	if err := client.Logout(ctx); err != nil {
-		_ = err
+	if l.container != nil {
+		if devices, err := l.container.GetAllDevices(ctx); err == nil {
+			for _, dev := range devices {
+				_ = dev.Delete(ctx)
+			}
+		}
 	}
-	replacement := whatsmeow.NewClient(l.container.NewDevice(), nil)
-	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
+	var replacement *whatsmeow.Client
+	if l.container != nil {
+		replacement = whatsmeow.NewClient(l.container.NewDevice(), nil)
+		replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
+	}
 	l.mu.Lock()
 	l.client = replacement
 	l.historyPeer = replacement
 	l.pairing = PairingSnapshot{State: "unpaired"}
 	l.latestQR = PairingSnapshot{}
-	l.state = "connecting"
+	l.state = "offline"
 	l.caughtUpAt = nil
 	l.lastHistoryAt = time.Time{}
+	l.boundAccountID = ""
+	l.accountProof = ""
+	l.accountVerification = AccountVerificationSnapshot{State: "unverified"}
 	l.mu.Unlock()
-	if runCtx != nil && runCtx.Err() == nil {
+	if replacement != nil && runCtx != nil && runCtx.Err() == nil {
+		l.mu.Lock()
+		l.state = "connecting"
+		l.mu.Unlock()
 		if err := l.connectClient(runCtx, replacement); err != nil {
 			return fmt.Errorf("WhatsApp logged out, but a fresh linking session could not start: %w", err)
 		}
@@ -442,13 +461,18 @@ func (l *Live) Freshness() FreshnessSnapshot {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	value := FreshnessSnapshot{State: l.state, CaughtUpAt: l.caughtUpAt, ConnectionEpoch: l.connectionEpoch, StoredAccountID: l.boundAccountID, AccountProof: l.accountProof, Verification: l.accountVerification}
-	if l.client != nil && l.client.Store != nil && l.client.Store.ID != nil {
-		sum := sha256.Sum256([]byte(l.client.Store.ID.ToNonAD().String()))
-		value.AccountID = hex.EncodeToString(sum[:])
-		if !l.client.IsConnected() && value.State == "current-read-only" {
+	if l.client == nil || l.client.Store == nil || l.client.Store.ID == nil {
+		if value.State == "current-read-only" || value.State == "catching-up" {
 			value.State = "offline"
 			value.CaughtUpAt = nil
 		}
+		return value
+	}
+	sum := sha256.Sum256([]byte(l.client.Store.ID.ToNonAD().String()))
+	value.AccountID = hex.EncodeToString(sum[:])
+	if !l.client.IsConnected() && value.State == "current-read-only" {
+		value.State = "offline"
+		value.CaughtUpAt = nil
 	}
 	return value
 }
