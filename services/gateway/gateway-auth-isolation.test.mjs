@@ -91,4 +91,32 @@ test("gateway enforces tenant isolation between owner and newly registered users
     headers: { authorization: `Bearer ${user2Token}` },
   });
   assert.equal(directAccessRes.status, 404);
+
+  // 8. User 2 checking status -> reports disconnected / offline, never owner's live WhatsApp!
+  const user2Status = await fetch(`http://127.0.0.1:${port}/api/v1/status`, {
+    headers: { authorization: `Bearer ${user2Token}` },
+  }).then((r) => r.json());
+  assert.equal(user2Status.connected, false);
+  assert.equal(user2Status.connectionState, "offline");
+  assert.equal(user2Status.pairing.state, "unpaired");
+
+  // 9. User 2 attempting pairing endpoints -> 403
+  const user2Pairing = await fetch(`http://127.0.0.1:${port}/api/v1/pairing-qr`, {
+    headers: { authorization: `Bearer ${user2Token}` },
+  });
+  assert.equal(user2Pairing.status, 403);
+
+  // 10. User 2 attempting connect -> 403
+  const user2Connect = await fetch(`http://127.0.0.1:${port}/api/v1/connect`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${user2Token}` },
+  });
+  assert.equal(user2Connect.status, 403);
+
+  // 11. User 2 attempting events stream -> 204
+  const user2Events = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {
+    headers: { authorization: `Bearer ${user2Token}` },
+  });
+  assert.equal(user2Events.status, 204);
 });
+

@@ -966,6 +966,22 @@ export function createGatewayServer(options = {}) {
           channel: process.env.MYCROBO_BUILD_CHANNEL || "development",
           buildId: process.env.MYCROBO_BUILD_ID || "unversioned",
         };
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            return json(response, 200, {
+              ...build,
+              apiVersion: "1.0",
+              connector: "personal-pilot",
+              connected: false,
+              connectionState: "offline",
+              readOnly: true,
+              sendAvailable: false,
+              pairing: { state: "unpaired" },
+              automaticDelivery: autoSendRuntime.status(),
+            });
+          }
+        }
         if (bridgeSource) return json(response, 200, { ...(await bridgeSource.status()), ...build, automaticDelivery: autoSendRuntime.status() });
         return json(response, 200, {
           ...build,
@@ -1018,6 +1034,10 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/integrations/whatsapp/logout") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to log out WhatsApp." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) return json(response, 403, { error: "Only the workspace owner can log out WhatsApp." });
+        }
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
         if (!bridgeSource?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
         try {
@@ -1078,12 +1098,20 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/storage") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for storage status." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) return json(response, 200, { available: false });
+        }
         if (typeof bridgeSource?.storage !== "function") return json(response, 200, { available: false });
         const [storage, legacy] = await Promise.all([bridgeSource.storage(), legacyRecoveryStatus(userDataDir)]);
         return json(response, 200, { available: true, ...storage, legacy_recovery_bytes: legacy.bytes });
       }
       if (url.pathname === "/api/v1/sync-truth") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for sync truth." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) return json(response, 200, { syncTruth: null });
+        }
         return json(response, 200, await syncTruthPayload());
       }
       if (url.pathname === "/api/v1/privacy/export") {
@@ -1149,6 +1177,14 @@ export function createGatewayServer(options = {}) {
           contextSources: await connectionPayload(),
         });
       }
+      if (url.pathname.startsWith("/api/v1/pairing-")) {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            return json(response, 403, { error: "WhatsApp device pairing is only available to the workspace owner." });
+          }
+        }
+      }
       if (url.pathname === "/api/v1/pairing-qr") {
         if (!bridgeSource?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
         try {
@@ -1202,6 +1238,14 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/events") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for live updates." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            response.writeHead(204, { "cache-control": "no-store" });
+            response.end();
+            return;
+          }
+        }
         if (!bridgeSource?.events) {
           response.writeHead(204, { "cache-control": "no-store" });
           response.end();
@@ -1228,6 +1272,14 @@ export function createGatewayServer(options = {}) {
           if (!response.writableEnded) response.end();
         }
         return;
+      }
+      if (url.pathname.startsWith("/api/v1/media/")) {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            return json(response, 404, { error: "Attachment not found in your workspace." });
+          }
+        }
       }
       const mediaRetryMatch = /^\/api\/v1\/media\/([^/]+)\/retry$/u.exec(url.pathname);
       if (mediaRetryMatch) {
@@ -1329,6 +1381,17 @@ export function createGatewayServer(options = {}) {
       if (url.pathname === "/api/v1/autonomy") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for sending safeguards." });
         return json(response, 200, await tenantAutonomyPayload());
+      }
+      if (url.pathname.startsWith("/api/v1/chats/")) {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (!caller.authenticated) {
+            return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
+          }
+          if (!caller.isOwner) {
+            return json(response, 404, { error: "Chat not found in your workspace." });
+          }
+        }
       }
       const autonomyMatch = /^\/api\/v1\/chats\/([^/]+)\/autonomy$/u.exec(url.pathname);
       if (autonomyMatch) {
@@ -1483,6 +1546,12 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/connect") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) {
+            return json(response, 403, { error: "Only the workspace owner can connect WhatsApp." });
+          }
+        }
         if (!bridgeSource) return json(response, 409, { error: "The linked-device bridge is not configured." });
         return json(response, 202, await bridgeSource.startImport());
       }
