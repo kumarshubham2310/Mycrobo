@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -717,9 +718,13 @@ func (l *Live) requireAccountBinding(ctx context.Context, client *whatsmeow.Clie
 	}
 	verification.ExpectedOwnerMatched = trustedOwnerMatch
 	binding, err := repository.BindAccount(ctx, accountID, aliases)
-	if err != nil && trustedOwnerMatch {
+	if err != nil && (trustedOwnerMatch || os.Getenv("MYCROBO_AUTO_REBIND_ACCOUNT") == "true") {
 		if repairer, ok := repository.(store.TrustedAccountBindingRepository); ok {
-			binding, err = repairer.RepairAccountBindingFromTrustedOwner(ctx, expectedAccountScopeID)
+			repairTarget := expectedAccountScopeID
+			if repairTarget == "" {
+				repairTarget = accountID
+			}
+			binding, err = repairer.RepairAccountBindingFromTrustedOwner(ctx, repairTarget)
 		}
 	}
 	l.mu.Lock()

@@ -237,13 +237,15 @@ if (existsSync(bridgeExe)) {
 
   console.log(`Starting MyCrobo live WhatsApp bridge on 127.0.0.1:${bridgePort}...`);
   try {
+    const bridgeEnv = {
+      ...process.env,
+      MYCROBO_BRIDGE_TOKEN: bridgeToken,
+      MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
+      MYCROBO_AUTO_REBIND_ACCOUNT: "true",
+    };
     const directChild = spawn(bridgeExe, bridgeArgs, {
       cwd: root,
-      env: {
-        ...process.env,
-        MYCROBO_BRIDGE_TOKEN: bridgeToken,
-        MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
-      },
+      env: bridgeEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     wireBridge(directChild);
@@ -252,11 +254,7 @@ if (existsSync(bridgeExe)) {
       try {
         const goBridge = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
           cwd: resolve(root, "services", "whatsapp-bridge"),
-          env: {
-            ...process.env,
-            MYCROBO_BRIDGE_TOKEN: bridgeToken,
-            MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
-          },
+          env: bridgeEnv,
           stdio: ["ignore", "pipe", "pipe"],
         });
         wireBridge(goBridge);
@@ -273,6 +271,7 @@ if (existsSync(bridgeExe)) {
           ...process.env,
           MYCROBO_BRIDGE_TOKEN: bridgeToken,
           MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
+          MYCROBO_AUTO_REBIND_ACCOUNT: "true",
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
