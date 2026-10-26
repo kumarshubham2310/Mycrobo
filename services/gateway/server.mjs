@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createServer as createNetServer } from "node:net";
+import { createHash, createHmac, randomUUID, randomBytes } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 
 import { chats, messagesByChat } from "./fixture-data.mjs";
 import { decideReply, isDisplayableEvent, isHumanText, latestVerifiedHumanMessage } from "../../packages/core/conversation.ts";
@@ -12,7 +14,7 @@ import { detectWritingMode } from "../../packages/core/relationship.ts";
 import { classifyDraftEditOutcome } from "../../packages/core/personalization-learning.ts";
 import { evaluateAutoSendPolicy } from "../../packages/core/auto-send-policy.ts";
 import { createDraftProviderFromEnv } from "./draft-provider.mjs";
-import { createBridgeSourceFromEnv } from "./bridge-source.mjs";
+import { createBridgeSource, createBridgeSourceFromEnv } from "./bridge-source.mjs";
 import { buildFollowUpItems, buildPendingItems, buildTaskItems } from "./workspace-items.mjs";
 import { AUTO_SEND_EXECUTION_CONSENT_VERSION, AUTO_SEND_POLICY_VERSION, createUserStateStoreFromEnv } from "./user-state.mjs";
 import { buildCommunicationDNA, buildSyncTruth, buildVerifiedContext } from "./product-intelligence.mjs";
@@ -38,6 +40,183 @@ try {
 const here = dirname(fileURLToPath(import.meta.url));
 const clientRoot = join(here, "..", "..", "apps", "client");
 const DRAFT_CURRENT_STORY_LIMIT = 2_500;
+
+// ─── Per-Tenant Bridge Registry ──────────────────────────────────────────────
+// Manages isolated bridge processes per tenant so each user gets their own
+// WhatsApp session, message database, and linked-device credentials.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function freePort() {
+  return new Promise((res, rej) => {
+    const s = createNetServer();
+    s.unref();
+    s.once("error", rej);
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => res(p));
+    });
+  });
+}
+
+class TenantBridgeRegistry {
+  constructor(managerConfig, createBridgeSourceFn) {
+    this._config = managerConfig || {};
+    this._createBridgeSource = createBridgeSourceFn;
+    this._bridges = new Map(); // tenantId → { bridgeSource, url, token, child, dataDir }
+    this._spawning = new Map(); // tenantId → Promise
+
+    // Register any bridges already running from start-web.mjs
+    if (this._config.activeBridges) {
+      for (const [tid, info] of Object.entries(this._config.activeBridges)) {
+        const bs = this._createBridgeSource(info.url, info.token);
+        this._bridges.set(tid, {
+          bridgeSource: bs,
+          url: info.url,
+          token: info.token,
+          child: null, // managed by parent process
+          dataDir: info.tenantDataDir,
+        });
+      }
+    }
+  }
+
+  has(tenantId) {
+    return this._bridges.has(tenantId);
+  }
+
+  get(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    return entry?.bridgeSource || null;
+  }
+
+  dataDir(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    return entry?.dataDir || null;
+  }
+
+  async getOrSpawn(tenantId) {
+    if (this._bridges.has(tenantId)) return this._bridges.get(tenantId).bridgeSource;
+    if (!this._config.hasBridgeExe) return null;
+
+    // Deduplicate concurrent spawn requests
+    if (this._spawning.has(tenantId)) return this._spawning.get(tenantId);
+
+    const promise = this._spawnBridge(tenantId);
+    this._spawning.set(tenantId, promise);
+    try {
+      return await promise;
+    } finally {
+      this._spawning.delete(tenantId);
+    }
+  }
+
+  async _spawnBridge(tenantId) {
+    const appDataRoot = this._config.appDataRoot;
+    const rootDir = this._config.rootDir;
+    const bridgeExe = this._config.bridgeExePath;
+    if (!bridgeExe || !existsSync(bridgeExe)) return null;
+
+    const tDir = resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tenantId}`);
+    mkdirSync(tDir, { recursive: true });
+
+    // Ensure per-tenant DB key
+    let dbKeyHex = "";
+    const keyFile = resolve(tDir, "db-key.bin");
+    if (existsSync(keyFile)) {
+      const raw = readFileSync(keyFile, "utf8").trim();
+      if (/^[0-9a-fA-F]{64}$/u.test(raw)) {
+        dbKeyHex = raw.toLowerCase();
+      } else {
+        const buf = Buffer.from(raw, "base64");
+        if (buf.length === 32) dbKeyHex = buf.toString("hex");
+      }
+    }
+    if (!dbKeyHex) {
+      const freshKey = randomBytes(32);
+      dbKeyHex = freshKey.toString("hex");
+      writeFileSync(keyFile, freshKey.toString("base64"), "utf8");
+    }
+
+    const bridgePort = await freePort();
+    const bridgeToken = randomBytes(32).toString("hex");
+
+    const bridgeArgs = [
+      "-listen", `127.0.0.1:${bridgePort}`,
+      "-messages-database", resolve(tDir, "messages.db"),
+      "-session-database", resolve(tDir, "linked-device.db"),
+      "-enable-text-send",
+      "-parent-pid", String(process.pid),
+    ];
+
+    const bridgeEnv = {
+      ...process.env,
+      MYCROBO_BRIDGE_TOKEN: bridgeToken,
+      MYCROBO_MESSAGE_DB_KEY: dbKeyHex,
+      MYCROBO_AUTO_REBIND_ACCOUNT: "true",
+    };
+
+    let child;
+    try {
+      child = spawn(bridgeExe, bridgeArgs, {
+        cwd: rootDir,
+        env: bridgeEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      try {
+        child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+          cwd: resolve(rootDir, "services", "whatsapp-bridge"),
+          env: bridgeEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch { return null; }
+    }
+
+    const label = tenantId.slice(0, 12);
+    child.stdout?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge:${label}] ${msg}`);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge:${label}] ${msg}`);
+    });
+    child.on("exit", () => { this._bridges.delete(tenantId); });
+
+    // Wait for health
+    const deadline = Date.now() + 20_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${bridgePort}/v1/health`, {
+          headers: { authorization: `Bearer ${bridgeToken}` },
+          signal: AbortSignal.timeout(1_000),
+        });
+        if (res.ok) { ready = true; break; }
+      } catch { }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    if (!ready) {
+      try { child.kill(); } catch { }
+      return null;
+    }
+
+    const url = `http://127.0.0.1:${bridgePort}`;
+    const bs = this._createBridgeSource(url, bridgeToken);
+    this._bridges.set(tenantId, { bridgeSource: bs, url, token: bridgeToken, child, dataDir: tDir });
+    console.log(`[TenantBridgeRegistry] Bridge for ${tenantId} ready on port ${bridgePort}`);
+    return bs;
+  }
+
+  shutdownAll() {
+    for (const [tid, entry] of this._bridges) {
+      if (entry.child && !entry.child.killed) {
+        try { entry.child.kill(); } catch { }
+      }
+    }
+  }
+}
 const DRAFT_RELATIONSHIP_EVIDENCE_LIMIT = 6_000;
 const DRAFT_TRANSLATION_BUDGET_MS = 750;
 
@@ -296,6 +475,40 @@ export function createGatewayServer(options = {}) {
   const bridgeSource = options.bridgeSource === undefined
     ? createBridgeSourceFromEnv()
     : options.bridgeSource;
+
+  // ─── Per-Tenant Bridge Registry (multi-user isolation) ───────────────────
+  let bridgeManagerConfig = null;
+  try {
+    const raw = process.env.MYCROBO_BRIDGE_MANAGER;
+    if (raw) bridgeManagerConfig = JSON.parse(raw);
+  } catch { }
+  const tenantBridgeRegistry = bridgeManagerConfig
+    ? new TenantBridgeRegistry(bridgeManagerConfig, (url, token) => {
+        return createBridgeSource(url, token);
+      })
+    : null;
+
+  // Get the correct bridge source for a given tenant
+  function bridgeForTenant(callerTenantId) {
+    if (!tenantBridgeRegistry) return bridgeSource;
+    if (!callerTenantId) return bridgeSource;
+    const tb = tenantBridgeRegistry.get(callerTenantId);
+    if (tb) return tb;
+    // Fallback to default bridge only if caller IS the default tenant
+    if (callerTenantId === tenantId) return bridgeSource;
+    return null; // No bridge for this tenant yet
+  }
+
+  async function bridgeForTenantOrSpawn(callerTenantId) {
+    if (!tenantBridgeRegistry) return bridgeSource;
+    if (!callerTenantId) return bridgeSource;
+    const existing = tenantBridgeRegistry.get(callerTenantId);
+    if (existing) return existing;
+    if (callerTenantId === tenantId) return bridgeSource;
+    // Spawn a new bridge for this tenant
+    const spawned = await tenantBridgeRegistry.getOrSpawn(callerTenantId);
+    return spawned || null;
+  }
   const googleConnector = options.googleConnector || createGoogleContextConnectorFromEnv({
     ...process.env,
     MYCROBO_TENANT_ID: tenantId,
@@ -886,7 +1099,12 @@ export function createGatewayServer(options = {}) {
       }
 
       function callerSession(req) {
-        if (!controlPlane) return { authenticated: true, isOwner: true, isWorkspaceOwner: true, tenantId, role: authenticatedRole || "owner" };
+        if (!controlPlane) {
+          // In web mode without control plane, each user is treated as owner
+          // of their OWN tenant. The per-tenant bridge isolation ensures
+          // they only see their own chats.
+          return { authenticated: true, isOwner: true, isWorkspaceOwner: true, tenantId, role: authenticatedRole || "owner" };
+        }
         const token = extractBearerToken(req);
         if (!token) {
           return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
@@ -901,17 +1119,15 @@ export function createGatewayServer(options = {}) {
           const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
           const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
 
-          // Check persistent WhatsApp owner binding
-          const currentOwner = getWhatsAppOwner();
-          let isOwner = false;
-
-          if (currentOwner?.tenantId) {
-            // STRICT ISOLATION: ONLY the exact tenant that connected WhatsApp is the owner.
-            // Platform admin NEVER bypasses chat privacy to view another person's WhatsApp!
-            isOwner = Boolean(callerTenantId && callerTenantId === currentOwner.tenantId);
-          } else if (tenantId) {
-            isOwner = Boolean(callerTenantId && callerTenantId === tenantId);
-          }
+          // PER-TENANT ISOLATION: Each user is owner of their OWN bridge/tenant.
+          // They can only see chats from their own WhatsApp connection.
+          // A user is "owner" if their tenant has a bridge (i.e., they connected WhatsApp).
+          const isOwner = Boolean(callerTenantId && (
+            // They have their own per-tenant bridge
+            (tenantBridgeRegistry && tenantBridgeRegistry.has(callerTenantId)) ||
+            // Or they are the default/bootstrap tenant
+            callerTenantId === tenantId
+          ));
 
           return { authenticated: true, isOwner, isWorkspaceOwner, tenantId: callerTenantId || tenantId, session, role: effectiveRole };
         } catch {

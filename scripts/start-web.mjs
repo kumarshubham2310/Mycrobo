@@ -181,15 +181,22 @@ if (activeDesktopTenant) {
   }
 }
 
-let bridgeChild = null;
+// ─── Per-Tenant Bridge Manager ───────────────────────────────────────────────
+// Each tenant gets its own bridge process with isolated session & message DBs.
+// The gateway spawns bridges on-demand when a tenant first requests pairing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const bridgeChildren = new Map(); // tenantId → { child, port, token, tenantDataDir }
 let gatewayChild = null;
 let shuttingDown = false;
 
 function cleanShutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  if (bridgeChild && !bridgeChild.killed) {
-    try { bridgeChild.kill(); } catch { }
+  for (const [tid, entry] of bridgeChildren) {
+    if (entry.child && !entry.child.killed) {
+      try { entry.child.kill(); } catch { }
+    }
   }
   if (gatewayChild && !gatewayChild.killed) {
     try { gatewayChild.kill(); } catch { }
@@ -199,9 +206,6 @@ function cleanShutdown() {
 process.on("SIGINT", () => { cleanShutdown(); process.exit(0); });
 process.on("SIGTERM", () => { cleanShutdown(); process.exit(0); });
 process.on("exit", cleanShutdown);
-
-let bridgeUrl = null;
-let bridgeToken = null;
 
 if (!existsSync(bridgeExe)) {
   console.log("Bridge executable not found. Attempting to build...");
@@ -218,83 +222,95 @@ if (!existsSync(bridgeExe)) {
   }
 }
 
-if (existsSync(bridgeExe)) {
+// Spawn a bridge for the default tenant (backward compatible)
+async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
+  if (bridgeChildren.has(tid)) return bridgeChildren.get(tid);
+  if (!existsSync(bridgeExe)) return null;
+
+  const tDir = tData || resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tid}`);
+  mkdirSync(tDir, { recursive: true });
+
+  // Ensure per-tenant DB key
+  let tenantDbKeyHex = dbKeyHex;
+  if (!tenantDbKeyHex) {
+    const keyFile = resolve(tDir, "db-key.bin");
+    if (existsSync(keyFile)) {
+      const raw = readFileSync(keyFile, "utf8").trim();
+      if (/^[0-9a-fA-F]{64}$/u.test(raw)) {
+        tenantDbKeyHex = raw.toLowerCase();
+      } else {
+        const buf = Buffer.from(raw, "base64");
+        if (buf.length === 32) {
+          tenantDbKeyHex = buf.toString("hex");
+        }
+      }
+    }
+    if (!tenantDbKeyHex) {
+      const freshKey = randomBytes(32);
+      tenantDbKeyHex = freshKey.toString("hex");
+      writeFileSync(resolve(tDir, "db-key.bin"), freshKey.toString("base64"), "utf8");
+    }
+  }
+
   const bridgePort = await freePort();
-  bridgeToken = randomBytes(32).toString("hex");
+  const bridgeToken = randomBytes(32).toString("hex");
 
   const bridgeArgs = [
     "-listen", `127.0.0.1:${bridgePort}`,
-    "-messages-database", resolve(tenantData, "messages.db"),
-    "-session-database", resolve(tenantData, "linked-device.db"),
+    "-messages-database", resolve(tDir, "messages.db"),
+    "-session-database", resolve(tDir, "linked-device.db"),
     "-enable-text-send",
     "-parent-pid", String(process.pid),
   ];
 
-  function wireBridge(child) {
-    if (!child) return;
-    bridgeChild = child;
-    child.stdout?.on("data", (chunk) => {
-      const msg = chunk.toString().trim();
-      if (msg) console.log(`[Bridge] ${msg}`);
-    });
-    child.stderr?.on("data", (chunk) => {
-      const msg = chunk.toString().trim();
-      if (msg) console.log(`[Bridge] ${msg}`);
-    });
-    child.on("exit", (code) => {
-      if (!shuttingDown && code !== 0) {
-        console.error(`Live bridge stopped with code ${code}.`);
-      }
-    });
-  }
+  const bridgeEnv = {
+    ...process.env,
+    MYCROBO_BRIDGE_TOKEN: bridgeToken,
+    MYCROBO_MESSAGE_DB_KEY: tenantDbKeyHex,
+    MYCROBO_AUTO_REBIND_ACCOUNT: "true",
+  };
 
-  console.log(`Starting MyCrobo live WhatsApp bridge on 127.0.0.1:${bridgePort}...`);
+  console.log(`[BridgeManager] Spawning bridge for tenant ${tid} on 127.0.0.1:${bridgePort}...`);
+
+  let child;
   try {
-    const bridgeEnv = {
-      ...process.env,
-      MYCROBO_BRIDGE_TOKEN: bridgeToken,
-      MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
-      MYCROBO_AUTO_REBIND_ACCOUNT: "true",
-    };
-    const directChild = spawn(bridgeExe, bridgeArgs, {
+    child = spawn(bridgeExe, bridgeArgs, {
       cwd: root,
       env: bridgeEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    wireBridge(directChild);
-    directChild.on("error", (err) => {
-      console.warn(`Direct bridge spawn failed (${err.message}). Trying via go run...`);
-      try {
-        const goBridge = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
-          cwd: resolve(root, "services", "whatsapp-bridge"),
-          env: bridgeEnv,
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        wireBridge(goBridge);
-      } catch (e) {
-        console.warn(`Go run bridge fallback failed: ${e.message}`);
-      }
-    });
   } catch (err) {
-    console.warn(`Could not spawn bridge executable directly (${err.message}). Trying via go run...`);
+    console.warn(`[BridgeManager] Direct bridge spawn failed for ${tid}: ${err.message}`);
     try {
-      const goBridge = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+      child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
         cwd: resolve(root, "services", "whatsapp-bridge"),
-        env: {
-          ...process.env,
-          MYCROBO_BRIDGE_TOKEN: bridgeToken,
-          MYCROBO_MESSAGE_DB_KEY: messageDbKeyHex,
-          MYCROBO_AUTO_REBIND_ACCOUNT: "true",
-        },
+        env: bridgeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      wireBridge(goBridge);
     } catch (e) {
-      console.warn(`Go run bridge fallback failed: ${e.message}`);
+      console.warn(`[BridgeManager] Go run fallback also failed for ${tid}: ${e.message}`);
+      return null;
     }
   }
 
+  child.stdout?.on("data", (chunk) => {
+    const msg = chunk.toString().trim();
+    if (msg) console.log(`[Bridge:${tid.slice(0, 12)}] ${msg}`);
+  });
+  child.stderr?.on("data", (chunk) => {
+    const msg = chunk.toString().trim();
+    if (msg) console.log(`[Bridge:${tid.slice(0, 12)}] ${msg}`);
+  });
+  child.on("exit", (code) => {
+    bridgeChildren.delete(tid);
+    if (!shuttingDown && code !== 0) {
+      console.error(`[BridgeManager] Bridge for tenant ${tid} stopped with code ${code}.`);
+    }
+  });
+
+  // Wait for health check
   const deadline = Date.now() + 20_000;
+  let ready = false;
   while (Date.now() < deadline) {
     try {
       const res = await fetch(`http://127.0.0.1:${bridgePort}/v1/health`, {
@@ -302,19 +318,65 @@ if (existsSync(bridgeExe)) {
         signal: AbortSignal.timeout(1_000),
       });
       if (res.ok) {
-        bridgeUrl = `http://127.0.0.1:${bridgePort}`;
-        console.log("Live WhatsApp bridge is ready!");
+        ready = true;
         break;
       }
     } catch { }
     await new Promise((r) => setTimeout(r, 150));
   }
 
-  if (!bridgeUrl) {
-    console.warn("Live bridge failed to respond in time. Continuing with gateway in fixture mode...");
+  if (!ready) {
+    console.warn(`[BridgeManager] Bridge for tenant ${tid} failed to respond in time.`);
+    try { child.kill(); } catch { }
+    return null;
+  }
+
+  const entry = {
+    child,
+    port: bridgePort,
+    token: bridgeToken,
+    url: `http://127.0.0.1:${bridgePort}`,
+    tenantDataDir: tDir,
+    tenantDbKeyHex,
+  };
+  bridgeChildren.set(tid, entry);
+  console.log(`[BridgeManager] Bridge for tenant ${tid} is ready on port ${bridgePort}`);
+  return entry;
+}
+
+// Spawn bridge for the default/bootstrap tenant
+let defaultBridgeUrl = null;
+let defaultBridgeToken = null;
+
+if (existsSync(bridgeExe)) {
+  const defaultEntry = await spawnBridgeForTenant(tenantId, tenantData, messageDbKeyHex);
+  if (defaultEntry) {
+    defaultBridgeUrl = defaultEntry.url;
+    defaultBridgeToken = defaultEntry.token;
+  } else {
+    console.warn("Default bridge failed to start. Continuing in fixture mode...");
   }
 } else {
   console.warn("Bridge binary not found. Running in fixture demo mode.");
+}
+
+// Build bridge manager config for the gateway
+const bridgeManagerConfig = {
+  bridgeExePath: bridgeExe,
+  appDataRoot,
+  rootDir: root,
+  defaultTenantId: tenantId,
+  hasBridgeExe: existsSync(bridgeExe),
+  // Active bridges at startup — gateway will manage additional ones dynamically
+  activeBridges: {},
+};
+
+for (const [tid, entry] of bridgeChildren) {
+  bridgeManagerConfig.activeBridges[tid] = {
+    url: entry.url,
+    token: entry.token,
+    tenantDataDir: entry.tenantDataDir,
+  };
 }
 
 const gatewayPort = process.env.MYCROBO_GATEWAY_PORT || "4177";
@@ -327,9 +389,12 @@ const gatewayEnv = {
   MYCROBO_AUTH_USER_ID: userId,
   MYCROBO_AUTH_ROLE: "owner",
   MYCROBO_USER_STATE_KEY: vaultKey,
-  ...(bridgeUrl ? {
-    MYCROBO_BRIDGE_URL: bridgeUrl,
-    MYCROBO_BRIDGE_TOKEN: bridgeToken,
+  // Per-tenant bridge manager config (gateway creates bridge sources on-demand)
+  MYCROBO_BRIDGE_MANAGER: JSON.stringify(bridgeManagerConfig),
+  // Keep backward compat: default tenant bridge URL/token
+  ...(defaultBridgeUrl ? {
+    MYCROBO_BRIDGE_URL: defaultBridgeUrl,
+    MYCROBO_BRIDGE_TOKEN: defaultBridgeToken,
   } : {}),
 };
 
