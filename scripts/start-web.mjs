@@ -138,23 +138,37 @@ if (activeDesktopTenant) {
   const defaultBase = resolve(appDataRoot, "mycrobo-reboot");
   let resolvedTenantId = "tenant-0000000000000001";
   let resolvedUserId = "user-000000000000000000000001";
-  const cpDb = resolve(defaultBase, "control-plane.db");
-  if (existsSync(cpDb)) {
+  tenantData = resolve(defaultBase, "web-tenant");
+  mkdirSync(tenantData, { recursive: true });
+
+  const ownerJsonPath = resolve(tenantData, "whatsapp-owner.json");
+  if (existsSync(ownerJsonPath)) {
     try {
-      const { DatabaseSync } = await import("node:sqlite");
-      const db = new DatabaseSync(cpDb, { open: true, readOnly: true });
-      const row = db.prepare("SELECT t.id as tenant_id, m.user_id FROM tenants t JOIN memberships m ON m.tenant_id = t.id WHERE t.status = 'active' ORDER BY t.created_at LIMIT 1").get();
-      if (row?.tenant_id) {
-        resolvedTenantId = row.tenant_id;
-        if (row.user_id) resolvedUserId = row.user_id;
+      const ownerData = JSON.parse(readFileSync(ownerJsonPath, "utf8"));
+      if (ownerData.tenantId) {
+        resolvedTenantId = ownerData.tenantId;
+        if (ownerData.userId) resolvedUserId = ownerData.userId;
       }
-      db.close();
     } catch {}
+  }
+
+  if (resolvedTenantId === "tenant-0000000000000001") {
+    const cpDb = resolve(defaultBase, "control-plane.db");
+    if (existsSync(cpDb)) {
+      try {
+        const { DatabaseSync } = await import("node:sqlite");
+        const db = new DatabaseSync(cpDb, { open: true, readOnly: true });
+        const row = db.prepare("SELECT t.id as tenant_id, m.user_id FROM tenants t JOIN memberships m ON m.tenant_id = t.id WHERE t.status = 'active' AND m.role = 'owner' ORDER BY m.created_at ASC LIMIT 1").get();
+        if (row?.tenant_id) {
+          resolvedTenantId = row.tenant_id;
+          if (row.user_id) resolvedUserId = row.user_id;
+        }
+        db.close();
+      } catch {}
+    }
   }
   tenantId = resolvedTenantId;
   userId = resolvedUserId;
-  tenantData = resolve(defaultBase, "web-tenant");
-  mkdirSync(tenantData, { recursive: true });
 
   const keyFile = resolve(tenantData, "db-key.bin");
   if (existsSync(keyFile)) {

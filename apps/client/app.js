@@ -472,7 +472,7 @@ async function savePreferences(event) {
 async function exportLocalState() {
   const status = document.querySelector("#settingsStatus");
   try {
-    const response = await fetch("/api/v1/privacy/export", { cache: "no-store" });
+    const response = await fetch("/api/v1/privacy/export", { cache: "no-store", headers: authHeaders() });
     if (!response.ok) throw new Error("Export is unavailable.");
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
@@ -493,7 +493,7 @@ async function resetLocalState() {
   const status = document.querySelector("#settingsStatus");
   if (!window.confirm("Reset MyCrobo preferences, conversation styles, task decisions and draft feedback on this device? WhatsApp history will remain.")) return;
   try {
-    const response = await fetch("/api/v1/privacy/user-state", { method: "DELETE", headers: { "x-mycrobo-confirm": "DELETE LOCAL SETTINGS" } });
+    const response = await fetch("/api/v1/privacy/user-state", { method: "DELETE", headers: authHeaders({ "x-mycrobo-confirm": "DELETE LOCAL SETTINGS" }) });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Local metadata could not be reset.");
     await loadPreferences();
@@ -508,7 +508,7 @@ async function removeLegacyRecovery() {
   const status = document.querySelector("#settingsStatus");
   if (!window.confirm("Permanently remove the pre-encryption SQLite recovery copies? The encrypted message and linked-device vaults will remain, but the old copies cannot be recovered.")) return;
   try {
-    const response = await fetch("/api/v1/privacy/legacy-recovery", { method: "DELETE", headers: { "x-mycrobo-confirm": "DELETE PLAINTEXT RECOVERY" } });
+    const response = await fetch("/api/v1/privacy/legacy-recovery", { method: "DELETE", headers: authHeaders({ "x-mycrobo-confirm": "DELETE PLAINTEXT RECOVERY" }) });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Migration recovery copies could not be removed.");
     status.textContent = `${readableBytes(payload.reclaimedBytes)} reclaimed. Encrypted vaults remain.`;
@@ -598,12 +598,16 @@ async function loadIntelligence(chat, epoch) {
   }
 }
 
-async function fetchJSON(url, options = {}) {
+function authHeaders(extra = {}) {
   const token = localStorage.getItem("mycrobo.web.auth_token.v1");
-  const headers = {
-    ...(options.headers || {}),
+  return {
+    ...(extra || {}),
     ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
+}
+
+async function fetchJSON(url, options = {}) {
+  const headers = authHeaders(options.headers || {});
   const response = await fetch(url, { ...options, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status}).`);
@@ -671,7 +675,7 @@ async function triggerAutoReplyForNewMessage(chat) {
 
     const response = await fetch(`/api/v1/chats/${encodeURIComponent(chat.id)}/draft`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ targetMessageId: exactSourceMessageId }),
     });
     if (!response.ok) {
@@ -1147,7 +1151,7 @@ async function draftReply(chat, targetMessageId, { draftAnyway = false, localOnl
   try {
     const response = await fetch(`/api/v1/chats/${encodeURIComponent(chat.id)}/draft`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ targetMessageId, draftAnyway, localOnly }),
       signal: controller.signal,
     });
@@ -2868,7 +2872,7 @@ function showSavedWorkspaceOffline(status) {
 
 async function refreshStatusOnce({ skipSavedChatProbe = false } = {}) {
   try {
-    const response = await fetch("/api/v1/status", { cache: "no-store", signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
+    const response = await fetch("/api/v1/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
     const status = await response.json();
     if (!response.ok) throw new Error(status.error || "Connection unavailable.");
     state.statusHealth.consecutiveFailures = 0;

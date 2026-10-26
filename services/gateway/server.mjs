@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -243,6 +243,43 @@ export function createGatewayServer(options = {}) {
     }
   }
   const tenantId = String(options.tenantId ?? process.env.MYCROBO_TENANT_ID ?? "").trim();
+  const ownerBindingFile = userDataDir ? join(userDataDir, "whatsapp-owner.json") : null;
+  let inMemoryWhatsAppOwner = null;
+
+  function getWhatsAppOwner() {
+    if (inMemoryWhatsAppOwner) return inMemoryWhatsAppOwner;
+    if (ownerBindingFile && existsSync(ownerBindingFile)) {
+      try {
+        const data = JSON.parse(readFileSync(ownerBindingFile, "utf8"));
+        if (data?.tenantId) {
+          inMemoryWhatsAppOwner = data;
+          return inMemoryWhatsAppOwner;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  function setWhatsAppOwner(newTenantId, newUserId) {
+    if (!newTenantId) return;
+    inMemoryWhatsAppOwner = {
+      tenantId: newTenantId,
+      userId: newUserId || null,
+      boundAt: new Date().toISOString(),
+    };
+    if (ownerBindingFile) {
+      try {
+        writeFileSync(ownerBindingFile, JSON.stringify(inMemoryWhatsAppOwner, null, 2), "utf8");
+      } catch {}
+    }
+  }
+
+  function clearWhatsAppOwner() {
+    inMemoryWhatsAppOwner = null;
+    if (ownerBindingFile && existsSync(ownerBindingFile)) {
+      try { unlinkSync(ownerBindingFile); } catch {}
+    }
+  }
   const authenticatedUserId = String(options.authenticatedUserId ?? process.env.MYCROBO_AUTH_USER_ID ?? "").trim();
   const trustedBuildVersion = String(options.buildVersion ?? process.env.MYCROBO_BUILD_VERSION ?? "development").trim().slice(0, 120) || "development";
   const configuredSubjectKey = options.autoSendSubjectKey ?? process.env.MYCROBO_USER_STATE_KEY ?? "";
@@ -858,10 +895,37 @@ export function createGatewayServer(options = {}) {
         try {
           const session = controlPlane.sessionFromToken(token);
           if (!session) return { authenticated: false, isOwner: false, tenantId: null, session: null };
-          // Strict tenant isolation: user can only access this workspace if their session belongs to this workspace's tenant
-          const isOwner = session.tenant?.id === tenantId
-            || (session.user?.platformAdmin === true && (!tenantId || tenantId === "tenant-0000000000000001"));
-          return { authenticated: true, isOwner, tenantId: session.tenant?.id || tenantId, session };
+
+          const callerTenantId = session.tenant?.id;
+          const callerRole = session.tenant?.role;
+          const isPlatformAdmin = session.user?.platformAdmin === true;
+
+          // Check persistent WhatsApp owner binding
+          const currentOwner = getWhatsAppOwner();
+          let isOwner = false;
+
+          if (currentOwner?.tenantId) {
+            // Strict tenant isolation: only the bound tenant (or platform admin of root tenant) is owner
+            isOwner = callerTenantId === currentOwner.tenantId
+              || (isPlatformAdmin && (!tenantId || tenantId === "tenant-0000000000000001"));
+          } else if (tenantId && tenantId !== "tenant-0000000000000001") {
+            isOwner = callerTenantId === tenantId || isPlatformAdmin;
+            if (isOwner && callerTenantId) {
+              setWhatsAppOwner(callerTenantId, session.user?.id);
+            }
+          } else {
+            // No owner bound yet: an authenticated tenant owner can be the workspace owner
+            if (callerRole === "owner") {
+              isOwner = true;
+              if (callerTenantId) {
+                setWhatsAppOwner(callerTenantId, session.user?.id);
+              }
+            } else if (isPlatformAdmin) {
+              isOwner = true;
+            }
+          }
+
+          return { authenticated: true, isOwner, tenantId: callerTenantId || tenantId, session };
         } catch {
           return { authenticated: false, isOwner: false, tenantId: null, session: null };
         }
@@ -1044,7 +1108,9 @@ export function createGatewayServer(options = {}) {
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
         if (!bridgeSource?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
         try {
-          return json(response, 200, await bridgeSource.logout());
+          const result = await bridgeSource.logout();
+          clearWhatsAppOwner();
+          return json(response, 200, result);
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not be logged out." });
         }
@@ -1553,6 +1619,9 @@ export function createGatewayServer(options = {}) {
           const caller = callerSession(request);
           if (caller.authenticated && !caller.isOwner) {
             return json(response, 403, { error: "Only the workspace owner can connect WhatsApp." });
+          }
+          if (caller.authenticated && caller.session?.tenant?.id && caller.session?.tenant?.role === "owner") {
+            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
         if (!bridgeSource) return json(response, 409, { error: "The linked-device bridge is not configured." });
