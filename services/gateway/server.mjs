@@ -1254,7 +1254,7 @@ export function createGatewayServer(options = {}) {
           if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
             return json(response, 409, { error: "WhatsApp is currently connected to another workspace. Disconnect that account first." });
           }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && !currentOwner?.tenantId) {
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
             setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
@@ -1287,7 +1287,7 @@ export function createGatewayServer(options = {}) {
           if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
             return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
           }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && !currentOwner?.tenantId) {
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
             setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
@@ -1310,7 +1310,7 @@ export function createGatewayServer(options = {}) {
           if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
             return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
           }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && !currentOwner?.tenantId) {
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
             setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
@@ -1330,7 +1330,7 @@ export function createGatewayServer(options = {}) {
           if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
             return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
           }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && !currentOwner?.tenantId) {
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
             setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
