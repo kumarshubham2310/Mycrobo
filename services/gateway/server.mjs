@@ -30,6 +30,7 @@ import { AUTO_SEND_BUILD_CERTIFICATION_CONTRACT, autoSendBuildCertificationDiges
 import { createBridgeAutoSendDeliveryBoundary } from "./auto-send-bridge-delivery.mjs";
 import { AUTO_SEND_DURABLE_STORAGE_BINDING, AUTO_SEND_SAFETY_BINDING_CONTRACT, readAutoSendHostBootstrapFromFd } from "./auto-send-host-bootstrap.mjs";
 import { createRequire } from "node:module";
+import { WebAuthManager } from "./web-auth-manager.mjs";
 
 const esmRequire = createRequire(import.meta.url);
 let ControlPlane = null;
@@ -488,6 +489,77 @@ export function createGatewayServer(options = {}) {
       })
     : null;
 
+  // ─── Web Auth Manager (Zero-dependency JWT & multi-user store) ───────────
+  const authDataDir = options.authDataDir || (userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"));
+  const webAuth = options.webAuth || new WebAuthManager(authDataDir);
+
+  function extractBearerToken(req) {
+    const auth = String(req?.headers?.authorization || "");
+    if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+    return "";
+  }
+
+  function callerSession(req) {
+    const token = extractBearerToken(req);
+    if (webAuth && token) {
+      const payload = webAuth.verifyJwt(token);
+      if (payload && payload.userId && payload.tenantId) {
+        const session = {
+          id: `session-${payload.userId}`,
+          user: {
+            id: payload.userId,
+            email: payload.email,
+            displayName: payload.displayName,
+            platformAdmin: false,
+            status: "active",
+          },
+          tenant: {
+            id: payload.tenantId,
+            name: payload.workspaceName || `${payload.displayName}'s Workspace`,
+            role: "owner",
+            selected: true,
+            status: "active",
+          },
+        };
+        return {
+          authenticated: true,
+          isOwner: true,
+          isWorkspaceOwner: true,
+          tenantId: payload.tenantId,
+          userId: payload.userId,
+          session,
+          role: "owner",
+        };
+      }
+    }
+    if (controlPlane) {
+      if (!token) {
+        return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+      }
+      try {
+        const session = controlPlane.sessionFromToken(token);
+        if (!session) return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+        const callerTenantId = session.tenant?.id;
+        const callerRole = session.tenant?.role;
+        const isPlatformAdmin = session.user?.platformAdmin === true;
+        const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
+        const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
+        return {
+          authenticated: true,
+          isOwner: true,
+          isWorkspaceOwner,
+          tenantId: callerTenantId || tenantId,
+          userId: session.user?.id,
+          session,
+          role: effectiveRole,
+        };
+      } catch {
+        return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+      }
+    }
+    return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+  }
+
   // Get the correct bridge source for a given tenant
   function bridgeForTenant(callerTenantId) {
     if (!tenantBridgeRegistry) return bridgeSource;
@@ -508,6 +580,22 @@ export function createGatewayServer(options = {}) {
     // Spawn a new bridge for this tenant
     const spawned = await tenantBridgeRegistry.getOrSpawn(callerTenantId);
     return spawned || null;
+  }
+
+  async function getBridgeForRequest(req, { spawnIfNeeded = false } = {}) {
+    const caller = callerSession(req);
+    const targetTenant = caller.tenantId;
+    if (!targetTenant) return null;
+    if (tenantBridgeRegistry) {
+      if (spawnIfNeeded) {
+        return await tenantBridgeRegistry.getOrSpawn(targetTenant);
+      }
+      const existing = tenantBridgeRegistry.get(targetTenant);
+      if (existing) return existing;
+      if (targetTenant === tenantId && bridgeSource) return bridgeSource;
+      return null;
+    }
+    return bridgeSource;
   }
   const googleConnector = options.googleConnector || createGoogleContextConnectorFromEnv({
     ...process.env,
@@ -1092,87 +1180,28 @@ export function createGatewayServer(options = {}) {
     response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      function extractBearerToken(req) {
-        const auth = String(req.headers.authorization || "");
-        if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
-        return "";
-      }
-
-      function callerSession(req) {
-        if (!controlPlane) {
-          // In web mode without control plane, each user is treated as owner
-          // of their OWN tenant. The per-tenant bridge isolation ensures
-          // they only see their own chats.
-          return { authenticated: true, isOwner: true, isWorkspaceOwner: true, tenantId, role: authenticatedRole || "owner" };
-        }
-        const token = extractBearerToken(req);
-        if (!token) {
-          return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
-        }
-        try {
-          const session = controlPlane.sessionFromToken(token);
-          if (!session) return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
-
-          const callerTenantId = session.tenant?.id;
-          const callerRole = session.tenant?.role;
-          const isPlatformAdmin = session.user?.platformAdmin === true;
-          const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
-          const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
-
-          // PER-TENANT ISOLATION: Each user is owner of their OWN bridge/tenant.
-          // They can only see chats from their own WhatsApp connection.
-          // A user is "owner" if their tenant has a bridge (i.e., they connected WhatsApp).
-          const isOwner = Boolean(callerTenantId && (
-            // They have their own per-tenant bridge
-            (tenantBridgeRegistry && tenantBridgeRegistry.has(callerTenantId)) ||
-            // Or they are the default/bootstrap tenant
-            callerTenantId === tenantId
-          ));
-
-          return { authenticated: true, isOwner, isWorkspaceOwner, tenantId: callerTenantId || tenantId, session, role: effectiveRole };
-        } catch {
-          return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
-        }
-      }
 
       if (url.pathname.startsWith("/api/v1/auth/")) {
         if (url.pathname === "/api/v1/auth/status") {
           if (request.method !== "GET") return json(response, 405, { error: "Use GET for auth status." });
-          if (!controlPlane) {
-            return json(response, 200, { authenticated: true, bootstrapRequired: false, user: null, tenant: null });
-          }
           const caller = callerSession(request);
-          const cpStatus = controlPlane.status();
           return json(response, 200, {
             authenticated: caller.authenticated,
-            bootstrapRequired: cpStatus.bootstrapRequired,
+            bootstrapRequired: false,
             user: caller.session?.user || null,
             tenant: caller.session?.tenant || null,
           });
         }
         if (url.pathname === "/api/v1/auth/signup") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign up." });
-          if (!controlPlane) return json(response, 500, { error: "Control plane is not initialized." });
           try {
             const input = await readJSON(request, 16_384);
-            const cpStatus = controlPlane.status();
-            let created;
-            if (cpStatus.bootstrapRequired) {
-              created = controlPlane.bootstrap({
-                email: input.email,
-                displayName: input.displayName,
-                password: input.password,
-                workspaceName: input.workspaceName || input.tenantName || "Primary workspace",
-                importedTenants: [{ id: tenantId || "tenant-0000000000000001", name: "WhatsApp Workspace" }],
-              });
-            } else {
-              created = controlPlane.register({
-                email: input.email,
-                displayName: input.displayName,
-                password: input.password,
-                workspaceName: input.workspaceName || input.tenantName,
-              });
-            }
+            const created = webAuth.signup({
+              email: input.email,
+              displayName: input.displayName,
+              password: input.password,
+              workspaceName: input.workspaceName || input.tenantName,
+            });
             return json(response, 200, { authenticated: true, token: created.token, session: created.session });
           } catch (err) {
             return json(response, 400, { error: err instanceof Error ? err.message : "Registration failed." });
@@ -1180,10 +1209,9 @@ export function createGatewayServer(options = {}) {
         }
         if (url.pathname === "/api/v1/auth/login") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign in." });
-          if (!controlPlane) return json(response, 500, { error: "Control plane is not initialized." });
           try {
             const input = await readJSON(request, 16_384);
-            const loggedIn = controlPlane.login({ email: input.email, password: input.password });
+            const loggedIn = webAuth.login({ email: input.email, password: input.password });
             return json(response, 200, { authenticated: true, token: loggedIn.token, session: loggedIn.session });
           } catch (err) {
             return json(response, 401, { error: err instanceof Error ? err.message : "Sign in failed." });
@@ -1191,10 +1219,6 @@ export function createGatewayServer(options = {}) {
         }
         if (url.pathname === "/api/v1/auth/logout") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign out." });
-          if (controlPlane) {
-            const token = extractBearerToken(request);
-            if (token) try { controlPlane.logout(token); } catch {}
-          }
           return json(response, 200, { signedOut: true });
         }
         return json(response, 404, { error: "Unknown auth endpoint." });
@@ -1241,30 +1265,19 @@ export function createGatewayServer(options = {}) {
           channel: process.env.MYCROBO_BUILD_CHANNEL || "development",
           buildId: process.env.MYCROBO_BUILD_ID || "unversioned",
         };
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
-            return json(response, 200, {
-              ...build,
-              apiVersion: "1.0",
-              connector: "personal-pilot",
-              connected: false,
-              connectionState: "offline",
-              readOnly: true,
-              sendAvailable: false,
-              pairing: { state: "unpaired" },
-              automaticDelivery: autoSendRuntime.status(),
-            });
-          }
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) {
+          return json(response, 200, { ...(await bridge.status()), ...build, automaticDelivery: autoSendRuntime.status() });
         }
-        if (bridgeSource) return json(response, 200, { ...(await bridgeSource.status()), ...build, automaticDelivery: autoSendRuntime.status() });
         return json(response, 200, {
           ...build,
           apiVersion: "1.0",
-          connector: "fixture",
-          connected: true,
-          readOnly: true,
+          connector: "whatsmeow-live",
+          connected: false,
+          connectionState: "offline",
+          readOnly: false,
           sendAvailable: false,
+          pairing: { state: "unpaired" },
           automaticDelivery: autoSendRuntime.status(),
         });
       }
@@ -1309,15 +1322,13 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/integrations/whatsapp/logout") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to log out WhatsApp." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isWorkspaceOwner) return json(response, 403, { error: "Only the workspace owner can log out WhatsApp." });
-        }
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
-        if (!bridgeSource?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
         try {
-          const result = await bridgeSource.logout();
-          clearWhatsAppOwner();
+          const result = await bridge.logout();
           return json(response, 200, result);
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not be logged out." });
@@ -1375,12 +1386,12 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/storage") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for storage status." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) return json(response, 200, { available: false });
-        }
-        if (typeof bridgeSource?.storage !== "function") return json(response, 200, { available: false });
-        const [storage, legacy] = await Promise.all([bridgeSource.storage(), legacyRecoveryStatus(userDataDir)]);
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 200, { available: false });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (typeof bridge?.storage !== "function") return json(response, 200, { available: false });
+        const tenantDir = tenantBridgeRegistry?.dataDir(caller.tenantId) || userDataDir;
+        const [storage, legacy] = await Promise.all([bridge.storage(), legacyRecoveryStatus(tenantDir)]);
         return json(response, 200, { available: true, ...storage, legacy_recovery_bytes: legacy.bytes });
       }
       if (url.pathname === "/api/v1/sync-truth") {
@@ -1455,37 +1466,27 @@ export function createGatewayServer(options = {}) {
         });
       }
       if (url.pathname.startsWith("/api/v1/pairing-")) {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isWorkspaceOwner) {
-            return json(response, 403, { error: "WhatsApp device pairing is only available to the workspace owner." });
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to pair WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
         }
       }
       if (url.pathname === "/api/v1/pairing-qr") {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          const currentOwner = getWhatsAppOwner();
-          const bridgeStatus = bridgeSource ? await bridgeSource.status().catch(() => null) : null;
-          if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
-            return json(response, 409, { error: "WhatsApp is currently connected to another workspace. Disconnect that account first." });
-          }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
-            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
-          }
-        }
-        if (!bridgeSource?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
         try {
-          const qr = await bridgeSource.pairingQR();
+          const qr = await bridge.pairingQR();
           response.writeHead(200, { "content-type": qr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
           response.end(qr.bytes);
           return;
         } catch (err) {
-          if (bridgeSource?.useQRPairing || bridgeSource?.restartPairing) {
+          if (bridge?.useQRPairing || bridge?.restartPairing) {
             try {
-              if (bridgeSource.useQRPairing) await bridgeSource.useQRPairing();
-              else if (bridgeSource.restartPairing) await bridgeSource.restartPairing();
-              const freshQr = await bridgeSource.pairingQR();
+              if (bridge.useQRPairing) await bridge.useQRPairing();
+              else if (bridge.restartPairing) await bridge.restartPairing();
+              const freshQr = await bridge.pairingQR();
               response.writeHead(200, { "content-type": freshQr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
               response.end(freshQr.bytes);
               return;
@@ -1496,85 +1497,60 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/pairing-phone") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to request a phone linking code." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          const currentOwner = getWhatsAppOwner();
-          const bridgeStatus = bridgeSource ? await bridgeSource.status().catch(() => null) : null;
-          if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
-            return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
-          }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
-            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
-          }
-        }
-        if (!bridgeSource?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
         const input = await readJSON(request, 1024);
         const phone = typeof input.phone === "string" ? input.phone.trim() : "";
         if (!/^\+[1-9]\d{6,14}$/u.test(phone)) return json(response, 400, { error: "Enter the complete international number, including its country code." });
         try {
-          return json(response, 201, await bridgeSource.pairByPhone(phone));
+          return json(response, 201, await bridge.pairByPhone(phone));
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not create a phone linking code." });
         }
       }
       if (url.pathname === "/api/v1/pairing-use-qr") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to switch to QR linking." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          const currentOwner = getWhatsAppOwner();
-          const bridgeStatus = bridgeSource ? await bridgeSource.status().catch(() => null) : null;
-          if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
-            return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
-          }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
-            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
-          }
-        }
-        if (!bridgeSource?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
         try {
-          return json(response, 200, await bridgeSource.useQRPairing());
+          return json(response, 200, await bridge.useQRPairing());
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "A fresh QR code is not ready yet." });
         }
       }
       if (url.pathname === "/api/v1/pairing-restart") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to start a fresh linking session." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          const currentOwner = getWhatsAppOwner();
-          const bridgeStatus = bridgeSource ? await bridgeSource.status().catch(() => null) : null;
-          if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
-            return json(response, 409, { error: "WhatsApp is currently connected to another workspace." });
-          }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner && (!currentOwner?.tenantId || !bridgeStatus?.connected)) {
-            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
-          }
-        }
-        if (!bridgeSource?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
         try {
-          return json(response, 200, await bridgeSource.restartPairing());
+          return json(response, 200, await bridge.restartPairing());
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not start a fresh linking session." });
         }
       }
       if (url.pathname === "/api/v1/events") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for live updates." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
-            response.writeHead(204, { "cache-control": "no-store" });
-            response.end();
-            return;
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          response.writeHead(401, { "cache-control": "no-store" });
+          response.end();
+          return;
         }
-        if (!bridgeSource?.events) {
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.events) {
           response.writeHead(204, { "cache-control": "no-store" });
           response.end();
           return;
         }
         const controller = new AbortController();
         response.once("close", () => controller.abort());
-        const upstream = await bridgeSource.events(controller.signal);
+        const upstream = await bridge.events(controller.signal);
         response.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
           "cache-control": "no-cache, no-store",
@@ -1595,19 +1571,20 @@ export function createGatewayServer(options = {}) {
         return;
       }
       if (url.pathname.startsWith("/api/v1/media/")) {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
-            return json(response, 404, { error: "Attachment not found in your workspace." });
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Attachment not found in your workspace." });
         }
       }
       const mediaRetryMatch = /^\/api\/v1\/media\/([^/]+)\/retry$/u.exec(url.pathname);
       if (mediaRetryMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to fetch an attachment." });
-        if (!bridgeSource?.retryMedia) return json(response, 503, { error: "Reconnect WhatsApp to fetch this attachment." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.retryMedia) return json(response, 503, { error: "Reconnect WhatsApp to fetch this attachment." });
         try {
-          return json(response, 202, await bridgeSource.retryMedia(decodeURIComponent(mediaRetryMatch[1])));
+          return json(response, 202, await bridge.retryMedia(decodeURIComponent(mediaRetryMatch[1])));
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "Attachment could not be fetched." });
         }
@@ -1615,8 +1592,11 @@ export function createGatewayServer(options = {}) {
       const mediaMatch = /^\/api\/v1\/media\/([^/]+)$/u.exec(url.pathname);
       if (mediaMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET to view an attachment." });
-        if (!bridgeSource?.media) return json(response, 404, { error: "Media is unavailable." });
-        const media = await bridgeSource.media(decodeURIComponent(mediaMatch[1]));
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.media) return json(response, 404, { error: "Media is unavailable." });
+        const media = await bridge.media(decodeURIComponent(mediaMatch[1]));
         response.removeHeader("x-frame-options");
         response.setHeader("content-security-policy", "default-src 'none'; frame-ancestors 'self'");
         response.setHeader("accept-ranges", "bytes");
@@ -1848,80 +1828,46 @@ export function createGatewayServer(options = {}) {
         }
       }
       if (url.pathname === "/api/v1/chats") {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (!caller.authenticated) {
-            return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
-          }
-          if (!caller.isOwner) {
-            const collection = url.searchParams.get("collection") ?? "active";
-            return json(response, 200, { collection, chats: [] });
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
         }
         const collection = url.searchParams.get("collection") ?? "active";
-        if (bridgeSource) return json(response, 200, { collection, chats: await enrichChats(await bridgeSource.listChats(collection)) });
-        return json(response, 200, {
-          collection,
-          chats: await enrichChats(chats.filter((chat) => chat.collection === collection).map(viewOfChat)),
-        });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.listChats(collection)) });
+        return json(response, 200, { collection, chats: [] });
       }
       if (url.pathname === "/api/v1/connect") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (!caller.authenticated) {
-            return json(response, 401, { error: "Authentication required to connect WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
-          }
-          if (!caller.isWorkspaceOwner) {
-            return json(response, 403, { error: "Only the workspace owner can connect WhatsApp." });
-          }
-          const currentOwner = getWhatsAppOwner();
-          const bridgeStatus = bridgeSource ? await bridgeSource.status().catch(() => null) : null;
-          if (bridgeStatus?.connected && currentOwner?.tenantId && currentOwner.tenantId !== caller.session?.tenant?.id) {
-            return json(response, 409, { error: "WhatsApp is currently connected to another workspace. Disconnect that account first." });
-          }
-          if (caller.session?.tenant?.id) {
-            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to connect WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
         }
-        if (!bridgeSource) return json(response, 409, { error: "The linked-device bridge is not configured." });
-        return json(response, 202, await bridgeSource.startImport());
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 409, { error: "The linked-device bridge is not configured." });
+        return json(response, 202, await bridge.startImport());
       }
       if (url.pathname === "/api/v1/search") {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (!caller.authenticated) {
-            return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
-          }
-          if (!caller.isOwner) {
-            const collection = url.searchParams.get("collection") === "archived" ? "archived" : "active";
-            return json(response, 200, { collection, chats: [] });
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         }
         const collection = url.searchParams.get("collection") === "archived" ? "archived" : "active";
         const query = (url.searchParams.get("q") || "").trim();
         if ([...query].length < 2) return json(response, 400, { error: "Enter at least two characters." });
-        if (bridgeSource) return json(response, 200, { collection, chats: await enrichChats(await bridgeSource.searchChats(collection, query)) });
-        const needle = query.toLocaleLowerCase();
-        const matches = chats.filter((chat) => chat.collection === collection && (
-          chat.title.toLocaleLowerCase().includes(needle)
-          || materializeEvents(chat.id).some((event) => isHumanText(event) && event.text.toLocaleLowerCase().includes(needle))
-        ));
-        return json(response, 200, { collection, chats: await enrichChats(matches.map(viewOfChat)) });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.searchChats(collection, query)) });
+        return json(response, 200, { collection, chats: [] });
       }
       const chatMatch = /^\/api\/v1\/chats\/([^/]+)\/(messages|latest|draft|send-approval|send)$/u.exec(url.pathname);
       if (chatMatch) {
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (!caller.authenticated) {
-            return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
-          }
-          if (!caller.isOwner) {
-            return json(response, 404, { error: "Chat not found in your workspace." });
-          }
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         }
         const chatId = decodeURIComponent(chatMatch[1]);
-        if (bridgeSource) {
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) {
           if (chatMatch[2] === "send-approval" || chatMatch[2] === "send") {
             if (request.method !== "POST") return json(response, 405, { error: "Use POST for an exact reviewed send." });
             if (securityPolicy.sendBrokerToken && !authorizeSendBroker(request.headers["x-mycrobo-send-broker"], securityPolicy.sendBrokerToken)) {
@@ -1933,18 +1879,18 @@ export function createGatewayServer(options = {}) {
             } catch (error) {
               return json(response, 400, { error: error instanceof Error ? error.message : "Invalid send request." });
             }
-            const [status, bundle] = await Promise.all([bridgeSource.status(), bridgeSource.latest(chatId)]);
+            const [status, bundle] = await Promise.all([bridge.status(), bridge.latest(chatId)]);
             if (!status.connected || !status.sendAvailable) return json(response, 409, { error: "WhatsApp sending is not currently available." });
             const exactLatestSource = bundle.latestSource || bundle.latest;
             if (!bundle.watermark?.verifiedAt || exactLatestSource?.id !== input.targetMessageId) {
               return json(response, 409, { error: "The latest message changed. Review this conversation again before sending." });
             }
             if (chatMatch[2] === "send-approval") {
-              const approval = await bridgeSource.approveSend({ chatId, ...input });
+              const approval = await bridge.approveSend({ chatId, ...input });
               return json(response, 201, { ...approval, recipient: bundle.chat?.title || chatId, targetMessageId: input.targetMessageId });
             }
             if (!input.approvalToken) return json(response, 400, { error: "Approval token is required." });
-            const receipt = await bridgeSource.sendApproved({ chatId, ...input });
+            const receipt = await bridge.sendApproved({ chatId, ...input });
             return json(response, 200, { ...receipt, recipient: bundle.chat?.title || chatId, targetMessageId: input.targetMessageId });
           }
           if (chatMatch[2] === "draft") {
@@ -1959,7 +1905,7 @@ export function createGatewayServer(options = {}) {
             const draftStartedAt = performance.now();
             const input = await readJSON(request);
             const bundleStartedAt = performance.now();
-            const bundle = await bridgeSource.bundle(chatId);
+            const bundle = await bridge.bundle(chatId);
             const bundleMs = elapsedMs(bundleStartedAt);
             if (bundle.readiness?.currentMessage?.state !== "ready" || bundle.readiness?.currentStory?.state !== "ready" || bundle.readiness?.draftAllowed !== true) {
               return json(response, 409, {
@@ -1977,15 +1923,15 @@ export function createGatewayServer(options = {}) {
             }
             const contextInputsStartedAt = performance.now();
             const [conversationState, preferences, chatStyle] = await Promise.all([
-              bridgeSource.conversationState ? bridgeSource.conversationState(chatId) : Promise.resolve(null),
+              bridge.conversationState ? bridge.conversationState(chatId) : Promise.resolve(null),
               userStateStore.preferences(),
               userStateStore.chatStyle(chatId),
             ]);
             const rawToneContext = input.localOnly === true
               ? { events: bundle.events, chats: [bundle.chat], accountScopeId: bundle.accountScopeId, runtimeEvidenceBounded: true }
-              : await (bridgeSource.toneContext
-                ? bridgeSource.toneContext(chatId)
-                : bridgeSource.toneEvents(chatId).then((events) => ({ events, chats: [] })));
+              : await (bridge.toneContext
+                ? bridge.toneContext(chatId)
+                : bridge.toneEvents(chatId).then((events) => ({ events, chats: [] })));
             const toneContext = boundedToneContext(rawToneContext, bundle.chat);
             const learningAccountScopeId = String(toneContext.accountScopeId || bundle.accountScopeId || "").trim();
             if (!learningAccountScopeId) return json(response, 409, {
@@ -2084,7 +2030,7 @@ export function createGatewayServer(options = {}) {
             });
           }
           if (chatMatch[2] === "latest") {
-            const bundle = await bridgeSource.latest(chatId);
+            const bundle = await bridge.latest(chatId);
             return json(response, 200, {
               chatId,
               verifiedAt: bundle.watermark.verifiedAt,
@@ -2096,8 +2042,8 @@ export function createGatewayServer(options = {}) {
             });
           }
           const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit")) || 200));
-          const page = await bridgeSource.messages(chatId, { limit, before: url.searchParams.get("before") || "" });
-          const latestState = await bridgeSource.latest(chatId);
+          const page = await bridge.messages(chatId, { limit, before: url.searchParams.get("before") || "" });
+          const latestState = await bridge.latest(chatId);
           return json(response, 200, {
             chatId,
             watermark: latestState.watermark,
@@ -2109,6 +2055,7 @@ export function createGatewayServer(options = {}) {
             nextBefore: page.nextBefore,
           });
         }
+        return json(response, 404, { error: "Chat not found in your workspace." });
         const chat = chats.find((item) => item.id === chatId);
         if (!chat) return json(response, 404, { error: "Chat not found." });
         if (chatMatch[2] === "send-approval" || chatMatch[2] === "send") {
