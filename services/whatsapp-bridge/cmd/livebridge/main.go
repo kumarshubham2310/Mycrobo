@@ -15,6 +15,8 @@ import (
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
+	"go.mau.fi/whatsmeow"
+	waStore "go.mau.fi/whatsmeow/store"
 
 	"mycrobo/whatsapp-bridge/internal/bridge"
 	"mycrobo/whatsapp-bridge/internal/httpapi"
@@ -49,6 +51,13 @@ func main() {
 	if *parentPID > 0 {
 		go watchParent(ctx, *parentPID, stop)
 	}
+
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 4*time.Second)
+	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
+		waStore.SetWAVersion(*latestVer)
+		log.Printf("using live WhatsApp web client version: %s", latestVer.String())
+	}
+	fetchCancel()
 	messageStorePath := *messagesDB
 	messageStoreKey := os.Getenv("MYCROBO_MESSAGE_DB_KEY")
 	var repo *store.SQLite

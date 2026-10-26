@@ -563,6 +563,12 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.mu.Unlock()
 	client = replacement
 
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Second)
+	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
+		waStore.SetWAVersion(*latestVer)
+	}
+	fetchCancel()
+
 	qr, err := client.GetQRChannel(ctx)
 	if err != nil {
 		return err
