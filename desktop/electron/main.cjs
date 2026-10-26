@@ -8,7 +8,7 @@ const { loadModelCredential, removeModelCredential, storeModelCredential } = req
 const { loadTenantRegistry } = require("./tenant-registry.cjs");
 const { ControlPlane } = require("./control-plane.cjs");
 const { prepareFreshLinkedDeviceSession, resolveLinkedDeviceDatabase } = require("./linked-device-session.cjs");
-const { materializeLegacyTenant, tenantDirectory } = require("./tenant-storage.cjs");
+const { materializeLegacyTenant, tenantDirectory, tenantUserDirectory } = require("./tenant-storage.cjs");
 const { acquireTenantRuntimeLease, createConfirmedQuitCoordinator, createServiceHealthMonitor, releaseTenantRuntimeLease, stopChildAndWait } = require("./runtime-lifecycle.cjs");
 const { resolveApplicationRoot } = require("./app-root.cjs");
 const { loadProtectedAutoSendBootstrap } = require("./auto-send-bootstrap.cjs");
@@ -105,6 +105,12 @@ function loadOrCreateVaultKey(userData) {
   const key = randomBytes(32).toString("base64");
   writeFileSync(keyPath, safeStorage.encryptString(key), { mode: 0o600, flag: "wx" });
   return key;
+}
+
+function userTenantDirectory(identity) {
+  if (!identity?.tenant?.id || !identity?.user?.id) throw new Error("Authenticate before opening private user storage.");
+  const ownerUserId = controlPlane.tenantStorageOwnerUserId(identity.tenant.id);
+  return tenantUserDirectory(installationUserData, identity.tenant.id, identity.user.id, ownerUserId);
 }
 
 function expectedWhatsAppAccountScope(userData) {
@@ -273,7 +279,7 @@ async function startLocalServices(identitySession) {
   const authorized = controlPlane.requireSession(desktopSessionToken);
   if (authorized.user.id !== identitySession.user.id || authorized.tenant.id !== identitySession.tenant.id) throw new Error("The workspace authorization changed before startup.");
   currentTenant = authorized.tenant;
-  const tenantData = tenantDirectory(installationUserData, authorized.tenant.id);
+  const tenantData = userTenantDirectory(authorized);
   protectUserDataDirectory(tenantData);
   runtimeLease = acquireTenantRuntimeLease(tenantData, authorized.tenant.id);
   controlPlane.persistEntitlementSnapshot(authorized.tenant.id);
@@ -416,7 +422,7 @@ async function restartForFreshWhatsAppSession() {
   if (identity.tenant.id !== currentTenant.id || !["owner", "admin"].includes(identity.tenant.role)) {
     throw new Error("Workspace administrator access is required to reconnect WhatsApp.");
   }
-  const tenantData = tenantDirectory(installationUserData, currentTenant.id);
+  const tenantData = userTenantDirectory(identity);
   shuttingDown = true;
   try { await stopLocalServices(); }
   catch (error) { shuttingDown = false; throw error; }
@@ -503,7 +509,7 @@ async function openAuthenticatedWorkspace(token) {
 
 function startConversationBacktestIfRequested({ url, gatewayToken, windowToken }) {
   if (String(process.env.MYCROBO_RUN_CONVERSATION_BACKTEST || "").toLowerCase() !== "true") return;
-  const tenantAuditDir = join(tenantDirectory(installationUserData, currentTenant.id), "diagnostics");
+  const tenantAuditDir = join(userTenantDirectory(controlPlane.requireSession(desktopSessionToken)), "diagnostics");
   mkdirSync(tenantAuditDir, { recursive: true, mode: 0o700 });
   const reportPath = String(process.env.MYCROBO_BACKTEST_REPORT || join(tenantAuditDir, "conversation-backtest.json"));
   const audit = spawn(process.execPath, ["--experimental-strip-types", join(applicationRoot, "scripts", "backtest-cloning.mjs")], {
@@ -700,13 +706,13 @@ function installCloudRelayIdentityBroker() {
   };
   ipcMain.handle("mycrobo:relay-status", async (event) => {
     const identity = verify(event);
-    return cloudRelayIdentity.status({ tenantData: tenantDirectory(installationUserData, identity.tenant.id), identity });
+    return cloudRelayIdentity.status({ tenantData: userTenantDirectory(identity), identity });
   });
   ipcMain.handle("mycrobo:bind-relay", async (event, input) => {
     const identity = verify(event);
     if (!["owner", "admin"].includes(identity.tenant.role)) throw new Error("Workspace administrator access is required to prepare cloud access.");
     return cloudRelayIdentity.bind({
-      tenantData: tenantDirectory(installationUserData, identity.tenant.id),
+      tenantData: userTenantDirectory(identity),
       identity,
       email: String(input?.email || ""),
       password: String(input?.password || ""),
@@ -813,7 +819,7 @@ if (instanceLockAcquired) app.whenReady().then(async () => {
   if (removalMode) {
     try {
       if (!currentIdentitySession) throw new Error("Sign in to MyCrobo before removing a workspace credential.");
-      const tenantData = tenantDirectory(installationUserData, currentIdentitySession.tenant.id);
+      const tenantData = userTenantDirectory(currentIdentitySession);
       protectUserDataDirectory(tenantData);
       const removed = removeModelCredential(tenantData);
       process.stdout.write(removed ? "MyCrobo model credential removed.\n" : "No MyCrobo model credential was configured.\n");
@@ -828,7 +834,7 @@ if (instanceLockAcquired) app.whenReady().then(async () => {
     try {
       if (!currentIdentitySession) throw new Error("Sign in to MyCrobo before provisioning a workspace credential.");
       const secret = readFileSync(0, "utf8");
-      const tenantData = tenantDirectory(installationUserData, currentIdentitySession.tenant.id);
+      const tenantData = userTenantDirectory(currentIdentitySession);
       protectUserDataDirectory(tenantData);
       storeModelCredential({ userData: tenantData, safeStorage, secret, provider: provisioningProvider });
       process.stdout.write("MyCrobo model credential stored in Windows-protected storage.\n");

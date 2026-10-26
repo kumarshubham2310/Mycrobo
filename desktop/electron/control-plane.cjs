@@ -312,6 +312,18 @@ class ControlPlane {
     if (!session) throw new Error("Sign in to continue.");
     return session;
   }
+  tenantStorageOwnerUserId(tenantId) {
+    if (!TENANT_ID.test(String(tenantId || ""))) throw new Error("Choose a valid workspace.");
+    const owner = this.db.prepare(`
+      SELECT user_id
+        FROM memberships
+       WHERE tenant_id=?
+       ORDER BY created_at ASC, user_id ASC
+       LIMIT 1
+    `).get(tenantId);
+    if (!owner?.user_id) throw new Error("The original tenant data owner could not be verified.");
+    return owner.user_id;
+  }
   requireAdmin(token) {
     const session = this.requireSession(token);
     if (!session.user.platformAdmin && !["owner", "admin"].includes(session.tenant.role)) throw new Error("Administrator access is required.");

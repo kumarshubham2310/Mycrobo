@@ -46,9 +46,15 @@ The Worker has no service-role key and cannot bypass RLS. A successful browser r
 
 The desktop Connections screen exposes one bounded **Prepare this desktop** action. It fetches public deployment configuration only from the pinned closed-pilot HTTPS origin and rejects a different Supabase project, an elevated key, unexpected configuration fields, a different authenticated email, an inactive membership or an unselected tenant when the account belongs to multiple tenants.
 
-The submitted password is sent directly to the pinned Supabase password endpoint for that one verification and is cleared from the renderer immediately. It is never written to disk. The resulting session tokens and an exportable PKCS#8 desktop private key are serialized only inside Electron `safeStorage`, in the current local tenant directory. The protected record is bound to the local control-plane user, local tenant, cloud user, cloud tenant, email, device ID and public key. A binding copied to another local user, tenant or Windows protection profile fails closed.
+The submitted password is sent directly to the pinned Supabase password endpoint for that one verification and is cleared from the renderer immediately. It is never written to disk. The resulting session tokens and an exportable PKCS#8 desktop private key are serialized only inside Electron `safeStorage`, in the current private user workspace directory. The protected record is bound to the local control-plane user, local tenant, cloud user, cloud tenant, email, device ID and public key. A binding copied to another local user, tenant or Windows protection profile fails closed.
 
 This step deliberately does **not** insert a `desktop_connector` device row. An ordinary bearer session proves the person and tenant but does not attest that the request came from the reviewed desktop binary. Therefore the returned status is only `identity_bound_key_protected`; remote registration, pairing and all capabilities remain false or empty.
+
+## Desktop-local user separation
+
+Within a desktop tenant, the local message database, linked-device session, vault key, settings and credentials are opened from storage bound to the authenticated local user. Existing tenant-root history remains pinned to the earliest registered tenant member; other users receive an empty `users/<user-id>` store and do not inherit that history or WhatsApp session. The owner record is validated before a user's storage path is selected. Existing chat/account-binding checks remain in force, so a different WhatsApp account cannot adopt the prior owner's saved history.
+
+This local separation does not enable web chat access. The hosted PWA still receives no chat data until the trusted desktop registration, signed pairing, scoped polling/decryption and independent security-review gates below are satisfied.
 
 ## Cryptographic contract
 
