@@ -1085,7 +1085,7 @@ export function createGatewayServer(options = {}) {
         auditLogger(contentFreeAuditRecord({ request, pathname: auditedPath, status: response.statusCode, durationMs: Date.now() - startedAt, correlationId }));
       } catch { /* diagnostics must never interrupt the product */ }
     });
-    response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+    response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("x-frame-options", "DENY");
     response.setHeader("referrer-policy", "no-referrer");

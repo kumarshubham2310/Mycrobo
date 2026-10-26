@@ -50,6 +50,7 @@ const state = {
   integrations: null, tenants: null,
   auth: null, admin: null, adminLoading: false,
   pairingMethod: "qr", pairingCountry: defaultPairingCountry(navigator.languages?.[0] || navigator.language, Intl.DateTimeFormat().resolvedOptions().timeZone), pairingCustomCode: "+", pairingPhoneDraft: "", pairingShowEntry: false,
+  qrObjectUrl: null, qrLoadSequence: 0,
 };
 const chatList = document.querySelector("#chatList");
 const messageList = document.querySelector("#messageList");
@@ -2451,6 +2452,9 @@ function stopPairingClock() {
     clearInterval(state.qrRefreshInterval);
     state.qrRefreshInterval = null;
   }
+  state.qrLoadSequence += 1;
+  if (state.qrObjectUrl) URL.revokeObjectURL(state.qrObjectUrl);
+  state.qrObjectUrl = null;
 }
 
 function startPairingClock(expiresAt) {
@@ -2742,8 +2746,57 @@ function renderQRPairing(status, pairing) {
   state.pairingMethod = "qr";
   setupPanel.dataset.mode = `scan-required:${pairing.qrImage}`;
   setupPanel.dataset.qr = pairing.qrImage;
-  setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("qr")}<span class="step">Connect by camera</span><h1>Scan with WhatsApp</h1><p>On your phone, open WhatsApp → Linked devices → Link a device.</p><img class="pairingQR" src="${escapeHtml(pairing.qrImage)}?t=${Date.now()}" alt="WhatsApp linked-device QR code" /><ol class="pairingSteps compactSteps"><li><span>1</span><p>Open WhatsApp on your phone.</p></li><li><span>2</span><p>Open <strong>Linked devices</strong>.</p></li><li><span>3</span><p>Tap <strong>Link a device</strong> and scan this code.</p></li></ol><button type="button" class="setupSecondary" id="refreshQR"><span aria-hidden="true">↻</span> Reload QR code</button><small>No chat message is sent by linking or importing.</small></div>`;
+  setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("qr")}<span class="step">Connect by camera</span><h1>Scan with WhatsApp</h1><p>On your phone, open WhatsApp → Linked devices → Link a device.</p><p id="qrLoadStatus" role="status">Loading secure QR code…</p><img class="pairingQR" alt="WhatsApp linked-device QR code" /><ol class="pairingSteps compactSteps"><li><span>1</span><p>Open WhatsApp on your phone.</p></li><li><span>2</span><p>Open <strong>Linked devices</strong>.</p></li><li><span>3</span><p>Tap <strong>Link a device</strong> and scan this code.</p></li></ol><button type="button" class="setupSecondary" id="refreshQR"><span aria-hidden="true">↻</span> Reload QR code</button><small>No chat message is sent by linking or importing.</small></div>`;
   bindPairingTabs(status);
+
+  const loadQRImage = async () => {
+    const qrImg = document.querySelector(".pairingQR");
+    const loadStatus = document.querySelector("#qrLoadStatus");
+    if (!qrImg || state.pairingMethod !== "qr" || state.view !== "chats") return;
+    const sequence = ++state.qrLoadSequence;
+    try {
+      const separator = pairing.qrImage.includes("?") ? "&" : "?";
+      const response = await fetch(`${pairing.qrImage}${separator}t=${Date.now()}`, {
+        cache: "no-store",
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `QR request failed (${response.status}).`);
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.startsWith("image/")) throw new Error("The server did not return a QR image.");
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("The server returned an empty QR image.");
+      const objectUrl = URL.createObjectURL(blob);
+      if (sequence !== state.qrLoadSequence || qrImg !== document.querySelector(".pairingQR")) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      const previousUrl = state.qrObjectUrl;
+      qrImg.onload = () => {
+        if (sequence !== state.qrLoadSequence) return;
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        if (loadStatus) loadStatus.textContent = "";
+        qrImg.onload = null;
+        qrImg.onerror = null;
+      };
+      qrImg.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        if (state.qrObjectUrl === objectUrl) state.qrObjectUrl = null;
+        qrImg.onload = null;
+        qrImg.onerror = null;
+        if (sequence !== state.qrLoadSequence) return;
+        if (loadStatus) loadStatus.textContent = "QR image could not be displayed. Try reloading it.";
+      };
+      state.qrObjectUrl = objectUrl;
+      qrImg.src = objectUrl;
+    } catch (error) {
+      if (sequence !== state.qrLoadSequence) return;
+      if (loadStatus) loadStatus.textContent = error instanceof Error ? error.message : "QR image could not be loaded.";
+    }
+  };
+  void loadQRImage();
 
   state.qrRefreshInterval = setInterval(async () => {
     const qrImg = document.querySelector(".pairingQR");
@@ -2754,7 +2807,7 @@ function renderQRPairing(status, pairing) {
     try {
       await fetchJSON("/api/v1/pairing-use-qr", { method: "POST" });
     } catch {}
-    qrImg.src = `${pairing.qrImage}?t=${Date.now()}`;
+    await loadQRImage();
   }, 15000);
 
   document.querySelector("#refreshQR")?.addEventListener("click", async () => {

@@ -12,6 +12,14 @@ test("connection polling cannot replace a selected non-chat tab", () => {
   assert.match(app, /setupPanel\.classList\.add\("hidden"\);\s+applyViewVisibility\(\)/u);
 });
 
+test("pairing QR is fetched with the private session and reports image loading failures", () => {
+  assert.match(app, /fetch\(`\$\{pairing\.qrImage\}[\s\S]*?headers: authHeaders\(\)/u);
+  assert.match(app, /URL\.createObjectURL\(blob\)/u);
+  assert.match(app, /id="qrLoadStatus" role="status"/u);
+  assert.match(app, /QR image could not be displayed/u);
+  assert.doesNotMatch(app.match(/function renderQRPairing[\s\S]*?\n\}/u)?.[0] || "", /<img class="pairingQR" src=/u);
+});
+
 test("background chat refresh retains the selected chat and viewport", () => {
   assert.match(app, /refreshedSelection[\s\S]*?state\.selected = \{ \.\.\.state\.selected, \.\.\.refreshedSelection \}/u);
   assert.doesNotMatch(app, /if \(state\.selected && !state\.chats\.some[\s\S]*?clearConversation\(\)/u);
@@ -149,4 +157,3 @@ test("reload icon clicks force-refresh chats and pairing without throwing", () =
   assert.match(app, /isRefreshingEverything/u);
   assert.match(app, /id="refreshQR"/u);
 });
-

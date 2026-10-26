@@ -369,6 +369,7 @@ test("fixture gateway cannot send", async () => {
     assert.equal(response.status, 501);
     assert.equal((await response.json()).sendAvailable, false);
     assert.match(response.headers.get("content-security-policy"), /default-src 'self'/u);
+    assert.match(response.headers.get("content-security-policy"), /img-src 'self' data: blob:/u);
     assert.equal(response.headers.get("x-frame-options"), "DENY");
   } finally {
     await new Promise((resolve) => server.close(resolve));
