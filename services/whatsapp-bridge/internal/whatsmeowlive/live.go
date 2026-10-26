@@ -34,7 +34,7 @@ import (
 )
 
 func init() {
-	waStore.SetOSInfo("Windows", [3]uint32{0, 1, 0})
+	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 }
 
@@ -315,6 +315,18 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	l.pairMu.Lock()
 	defer l.pairMu.Unlock()
 	if l.client.Store.ID != nil {
+		l.mu.RLock()
+		currentState := l.state
+		l.mu.RUnlock()
+		if currentState == "reauth-required" || currentState == "account-verification-required" || currentState == "offline" {
+			l.pairMu.Unlock()
+			err := l.Logout(ctx)
+			l.pairMu.Lock()
+			if err != nil {
+				return PairingSnapshot{}, err
+			}
+			return l.Pairing(), nil
+		}
 		return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 	}
 	l.mu.RLock()
@@ -543,6 +555,14 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.state = "connecting"
 	l.mu.Unlock()
 	client.Disconnect()
+	replacement := whatsmeow.NewClient(l.container.NewDevice(), nil)
+	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
+	l.mu.Lock()
+	l.client = replacement
+	l.historyPeer = replacement
+	l.mu.Unlock()
+	client = replacement
+
 	qr, err := client.GetQRChannel(ctx)
 	if err != nil {
 		return err
