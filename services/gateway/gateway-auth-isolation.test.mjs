@@ -100,18 +100,40 @@ test("gateway enforces tenant isolation between owner and newly registered users
   assert.equal(user2Status.connectionState, "offline");
   assert.equal(user2Status.pairing.state, "unpaired");
 
-  // 9. User 2 attempting pairing endpoints -> 403
+  // 9. Non-owner workspace member attempting pairing or connect -> 403
+  controlPlane.adminCreateUser(ownerToken, {
+    email: "member@example.com",
+    displayName: "Member User",
+    password: "Password1234!",
+    tenantId: ownerTenantId,
+    role: "member",
+  });
+  const memberLogin = controlPlane.login({ email: "member@example.com", password: "Password1234!" });
+  const memberToken = memberLogin.token;
+
+  const memberPairing = await fetch(`http://127.0.0.1:${port}/api/v1/pairing-qr`, {
+    headers: { authorization: `Bearer ${memberToken}` },
+  });
+  assert.equal(memberPairing.status, 403);
+
+  const memberConnect = await fetch(`http://127.0.0.1:${port}/api/v1/connect`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${memberToken}` },
+  });
+  assert.equal(memberConnect.status, 403);
+
+  // 10. User 2 (newly registered workspace owner) has authority to connect for their workspace
+  // (not rejected with 403 forbidden; returns bridge-not-configured since mock has no bridge)
   const user2Pairing = await fetch(`http://127.0.0.1:${port}/api/v1/pairing-qr`, {
     headers: { authorization: `Bearer ${user2Token}` },
   });
-  assert.equal(user2Pairing.status, 403);
+  assert.notEqual(user2Pairing.status, 403);
 
-  // 10. User 2 attempting connect -> 403
   const user2Connect = await fetch(`http://127.0.0.1:${port}/api/v1/connect`, {
     method: "POST",
     headers: { authorization: `Bearer ${user2Token}` },
   });
-  assert.equal(user2Connect.status, 403);
+  assert.notEqual(user2Connect.status, 403);
 
   // 11. User 2 attempting events stream -> 204
   const user2Events = await fetch(`http://127.0.0.1:${port}/api/v1/events`, {

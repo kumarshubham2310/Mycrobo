@@ -886,19 +886,21 @@ export function createGatewayServer(options = {}) {
       }
 
       function callerSession(req) {
-        if (!controlPlane) return { authenticated: true, isOwner: true, tenantId };
+        if (!controlPlane) return { authenticated: true, isOwner: true, isWorkspaceOwner: true, tenantId, role: authenticatedRole || "owner" };
         const token = extractBearerToken(req);
         if (!token) {
-          if (authenticatedRole === "owner") return { authenticated: true, isOwner: true, tenantId };
-          return { authenticated: false, isOwner: false, tenantId: null, session: null };
+          if (authenticatedRole === "owner") return { authenticated: true, isOwner: true, isWorkspaceOwner: true, tenantId, role: "owner" };
+          return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: authenticatedRole };
         }
         try {
           const session = controlPlane.sessionFromToken(token);
-          if (!session) return { authenticated: false, isOwner: false, tenantId: null, session: null };
+          if (!session) return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: authenticatedRole };
 
           const callerTenantId = session.tenant?.id;
           const callerRole = session.tenant?.role;
           const isPlatformAdmin = session.user?.platformAdmin === true;
+          const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
+          const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
 
           // Check persistent WhatsApp owner binding
           const currentOwner = getWhatsAppOwner();
@@ -925,9 +927,9 @@ export function createGatewayServer(options = {}) {
             }
           }
 
-          return { authenticated: true, isOwner, tenantId: callerTenantId || tenantId, session };
+          return { authenticated: true, isOwner, isWorkspaceOwner, tenantId: callerTenantId || tenantId, session, role: effectiveRole };
         } catch {
-          return { authenticated: false, isOwner: false, tenantId: null, session: null };
+          return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: authenticatedRole };
         }
       }
 
@@ -1003,7 +1005,9 @@ export function createGatewayServer(options = {}) {
           response.setHeader("retry-after", String(callbackLimit.retryAfterSeconds));
           return oauthResult(response, false, "Too many Google callback attempts. Wait briefly and try again.", 429);
         }
-        const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: authenticatedRole });
+        const caller = callerSession(request);
+        const capabilityRole = caller.role || authenticatedRole;
+        const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: capabilityRole });
         if (!capability.ok) return oauthResult(response, false, "This workspace role cannot change connected services.", capability.status);
         try {
           const result = await googleConnector.complete({ state: url.searchParams.get("state"), code: url.searchParams.get("code"), error: url.searchParams.get("error") });
@@ -1014,7 +1018,9 @@ export function createGatewayServer(options = {}) {
       }
       const authorization = authorizeGatewayRequest(request, securityPolicy);
       if (!authorization.ok) return json(response, authorization.status, { error: "The private application session is not authorized.", code: authorization.code });
-      const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: authenticatedRole });
+      const caller = callerSession(request);
+      const capabilityRole = caller.role || authenticatedRole;
+      const capability =  authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: capabilityRole });
       if (!capability.ok) return json(response, capability.status, {
         error: capability.code === "ROLE_CAPABILITY_DENIED"
           ? "This workspace role has read-only access to this operation."
@@ -1103,7 +1109,7 @@ export function createGatewayServer(options = {}) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to log out WhatsApp." });
         if (controlPlane) {
           const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) return json(response, 403, { error: "Only the workspace owner can log out WhatsApp." });
+          if (caller.authenticated && !caller.isWorkspaceOwner) return json(response, 403, { error: "Only the workspace owner can log out WhatsApp." });
         }
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
         if (!bridgeSource?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
@@ -1249,12 +1255,18 @@ export function createGatewayServer(options = {}) {
       if (url.pathname.startsWith("/api/v1/pairing-")) {
         if (controlPlane) {
           const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
+          if (caller.authenticated && !caller.isWorkspaceOwner) {
             return json(response, 403, { error: "WhatsApp device pairing is only available to the workspace owner." });
           }
         }
       }
       if (url.pathname === "/api/v1/pairing-qr") {
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner) {
+            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
+          }
+        }
         if (!bridgeSource?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
         try {
           const qr = await bridgeSource.pairingQR();
@@ -1277,6 +1289,12 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/pairing-phone") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to request a phone linking code." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner) {
+            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
+          }
+        }
         if (!bridgeSource?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
         const input = await readJSON(request, 1024);
         const phone = typeof input.phone === "string" ? input.phone.trim() : "";
@@ -1289,6 +1307,12 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/pairing-use-qr") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to switch to QR linking." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner) {
+            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
+          }
+        }
         if (!bridgeSource?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
         try {
           return json(response, 200, await bridgeSource.useQRPairing());
@@ -1298,6 +1322,12 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/pairing-restart") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to start a fresh linking session." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner) {
+            setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
+          }
+        }
         if (!bridgeSource?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
         try {
           return json(response, 200, await bridgeSource.restartPairing());
@@ -1617,10 +1647,10 @@ export function createGatewayServer(options = {}) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect." });
         if (controlPlane) {
           const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
+          if (caller.authenticated && !caller.isWorkspaceOwner) {
             return json(response, 403, { error: "Only the workspace owner can connect WhatsApp." });
           }
-          if (caller.authenticated && caller.session?.tenant?.id && caller.session?.tenant?.role === "owner") {
+          if (caller.authenticated && caller.session?.tenant?.id && caller.isWorkspaceOwner) {
             setWhatsAppOwner(caller.session.tenant.id, caller.session.user?.id);
           }
         }
