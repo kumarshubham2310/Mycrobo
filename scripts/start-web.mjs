@@ -136,8 +136,8 @@ if (activeDesktopTenant) {
 } else {
   console.log("Starting web workspace mode...");
   const defaultBase = resolve(appDataRoot, "mycrobo-reboot");
-  let resolvedTenantId = "";
-  let resolvedUserId = "";
+  let resolvedTenantId = "tenant-0000000000000001";
+  let resolvedUserId = "user-000000000000000000000001";
   tenantData = resolve(defaultBase, "web-tenant");
   mkdirSync(tenantData, { recursive: true });
 
@@ -157,8 +157,22 @@ if (activeDesktopTenant) {
 
   const keyFile = resolve(tenantData, "db-key.bin");
   if (existsSync(keyFile)) {
-    vaultKey = readFileSync(keyFile, "utf8").trim();
-    messageDbKeyHex = Buffer.from(vaultKey, "base64").toString("hex");
+    const raw = readFileSync(keyFile, "utf8").trim();
+    if (/^[0-9a-fA-F]{64}$/u.test(raw)) {
+      messageDbKeyHex = raw.toLowerCase();
+      vaultKey = Buffer.from(raw, "hex").toString("base64");
+    } else {
+      const buf = Buffer.from(raw, "base64");
+      if (buf.length === 32) {
+        vaultKey = raw;
+        messageDbKeyHex = buf.toString("hex");
+      } else {
+        const fresh = randomBytes(32);
+        vaultKey = fresh.toString("base64");
+        messageDbKeyHex = fresh.toString("hex");
+        writeFileSync(keyFile, vaultKey, "utf8");
+      }
+    }
   } else {
     const rawBytes = randomBytes(32);
     vaultKey = rawBytes.toString("base64");
