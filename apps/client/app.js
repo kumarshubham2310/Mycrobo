@@ -2447,6 +2447,10 @@ function pairingTabs(active) {
 function stopPairingClock() {
   clearInterval(pairingClockTimer);
   pairingClockTimer = null;
+  if (state?.qrRefreshInterval) {
+    clearInterval(state.qrRefreshInterval);
+    state.qrRefreshInterval = null;
+  }
 }
 
 function startPairingClock(expiresAt) {
@@ -2734,11 +2738,25 @@ function renderPhoneCode(status, pairing) {
 
 function renderQRPairing(status, pairing) {
   stopPairingClock();
+  clearInterval(state.qrRefreshInterval);
   state.pairingMethod = "qr";
   setupPanel.dataset.mode = `scan-required:${pairing.qrImage}`;
   setupPanel.dataset.qr = pairing.qrImage;
   setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("qr")}<span class="step">Connect by camera</span><h1>Scan with WhatsApp</h1><p>On your phone, open WhatsApp → Linked devices → Link a device.</p><img class="pairingQR" src="${escapeHtml(pairing.qrImage)}?t=${Date.now()}" alt="WhatsApp linked-device QR code" /><ol class="pairingSteps compactSteps"><li><span>1</span><p>Open WhatsApp on your phone.</p></li><li><span>2</span><p>Open <strong>Linked devices</strong>.</p></li><li><span>3</span><p>Tap <strong>Link a device</strong> and scan this code.</p></li></ol><button type="button" class="setupSecondary" id="refreshQR"><span aria-hidden="true">↻</span> Reload QR code</button><small>No chat message is sent by linking or importing.</small></div>`;
   bindPairingTabs(status);
+
+  state.qrRefreshInterval = setInterval(async () => {
+    const qrImg = document.querySelector(".pairingQR");
+    if (!qrImg || state.pairingMethod !== "qr" || state.view !== "chats") {
+      clearInterval(state.qrRefreshInterval);
+      return;
+    }
+    try {
+      await fetchJSON("/api/v1/pairing-use-qr", { method: "POST" });
+    } catch {}
+    qrImg.src = `${pairing.qrImage}?t=${Date.now()}`;
+  }, 15000);
+
   document.querySelector("#refreshQR")?.addEventListener("click", async () => {
     const button = document.querySelector("#refreshQR");
     if (button) {
