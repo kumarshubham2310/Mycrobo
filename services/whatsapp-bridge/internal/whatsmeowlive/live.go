@@ -35,7 +35,7 @@ import (
 )
 
 func init() {
-	waStore.SetOSInfo("Chrome (Windows)", waStore.GetWAVersion())
+	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 }
 
@@ -163,7 +163,7 @@ func open(ctx context.Context, sessionPath string, service *bridge.Service, hexK
 		_ = container.Close()
 		return nil, fmt.Errorf("load linked device: %w", err)
 	}
-	client := whatsmeow.NewClient(device, waLog.Stdout("Bridge", "INFO", false))
+	client := whatsmeow.NewClient(device, waLog.Stdout("Bridge", "DEBUG", true))
 	live := &Live{client: client, historyPeer: client, container: container, service: service, state: "offline", waiters: make(map[string]chan onDemandResult), mediaQueue: make(chan mediaJob, 256)}
 	live.client.AddEventHandler(func(raw any) { live.handleClientEvent(client, raw) })
 	for range 2 {
@@ -594,11 +594,13 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	// existing device so WhatsApp sees the same companion retrying, not
 	// a new one each time.
 	existingDevice, devErr := l.container.GetFirstDevice(ctx)
-	if devErr != nil {
-		// Only fall back to a new device if we cannot load the stored one.
+	if devErr != nil || (existingDevice != nil && existingDevice.ID != nil) {
+		if existingDevice != nil && existingDevice.ID != nil {
+			_ = existingDevice.Delete(ctx)
+		}
 		existingDevice = l.container.NewDevice()
 	}
-	replacement := whatsmeow.NewClient(existingDevice, waLog.Stdout("Bridge", "INFO", false))
+	replacement := whatsmeow.NewClient(existingDevice, waLog.Stdout("Bridge", "DEBUG", true))
 	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
 	l.mu.Lock()
 	l.client = replacement
@@ -609,7 +611,6 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Second)
 	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
 		waStore.SetWAVersion(*latestVer)
-		waStore.SetOSInfo("Chrome (Windows)", *latestVer)
 	}
 	fetchCancel()
 

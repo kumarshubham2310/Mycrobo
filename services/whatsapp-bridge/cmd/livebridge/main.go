@@ -53,12 +53,11 @@ func main() {
 		go watchParent(ctx, *parentPID, stop)
 	}
 
-	waStore.SetOSInfo("Chrome (Windows)", waStore.GetWAVersion())
+	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 	fetchCtx, fetchCancel := context.WithTimeout(ctx, 4*time.Second)
 	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
 		waStore.SetWAVersion(*latestVer)
-		waStore.SetOSInfo("Chrome (Windows)", *latestVer)
 		log.Printf("using live WhatsApp web client version: %s", latestVer.String())
 	}
 	fetchCancel()
