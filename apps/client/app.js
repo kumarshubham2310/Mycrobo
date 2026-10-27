@@ -2804,11 +2804,8 @@ function renderQRPairing(status, pairing) {
       clearInterval(state.qrRefreshInterval);
       return;
     }
-    try {
-      await fetchJSON("/api/v1/pairing-use-qr", { method: "POST" });
-    } catch {}
     await loadQRImage();
-  }, 15000);
+  }, 20000);
 
   document.querySelector("#refreshQR")?.addEventListener("click", async () => {
     const button = document.querySelector("#refreshQR");

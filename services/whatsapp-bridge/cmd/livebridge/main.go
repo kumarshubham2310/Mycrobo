@@ -166,7 +166,7 @@ func main() {
 	})
 	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
-		if snapshot.State != "scan-required" || snapshot.Code == "" || (!snapshot.ExpiresAt.IsZero() && time.Now().UTC().After(snapshot.ExpiresAt)) {
+		if snapshot.State != "scan-required" || snapshot.Code == "" {
 			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
 				snapshot = fresh
 			}
@@ -174,10 +174,6 @@ func main() {
 		response.Header().Set("Cache-Control", "no-store")
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
 			http.Error(response, "pairing code is not available", http.StatusNotFound)
-			return
-		}
-		if !snapshot.ExpiresAt.IsZero() && time.Now().UTC().After(snapshot.ExpiresAt) {
-			http.Error(response, "pairing code expired", http.StatusGone)
 			return
 		}
 		png, encodeErr := qrcode.Encode(snapshot.Code, qrcode.Medium, 320)

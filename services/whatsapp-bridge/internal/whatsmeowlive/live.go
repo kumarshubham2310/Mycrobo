@@ -332,8 +332,10 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	}
 	l.mu.RLock()
 	latest := l.latestQR
+	connected := l.client != nil && l.client.IsConnected()
+	deadline := l.pairingDeadline
 	l.mu.RUnlock()
-	if !l.client.IsConnected() || latest.State != "scan-required" || latest.Code == "" || (!latest.ExpiresAt.IsZero() && time.Until(latest.ExpiresAt) < 5*time.Second) {
+	if !connected || latest.State != "scan-required" || latest.Code == "" || (!deadline.IsZero() && time.Now().UTC().After(deadline)) {
 		if err := l.restartPairingSession(ctx); err != nil {
 			failure := pairingFailure(err)
 			l.setPairingSnapshot(failure)
