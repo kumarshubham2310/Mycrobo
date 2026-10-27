@@ -346,17 +346,21 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	// instead of killing the open WebSocket with a premature restart.
 	if connected && (pairingState == "preparing" || pairingState == "connecting") &&
 		(!deadline.IsZero() && time.Until(deadline) > pairingMinimumLifetime) {
-		if waitErr := l.waitForPairingReady(ctx, sequence); waitErr == nil {
-			// Refresh latest after successful wait
-			l.mu.RLock()
-			latest = l.latestQR
-			l.mu.RUnlock()
-		}
-		// Re-read connected state after wait
+		// Ignore wait error — always re-read state afterwards. If the wait
+		// failed because the browser closed its HTTP connection (ctx cancelled),
+		// we must NOT restart the pairing session.
+		_ = l.waitForPairingReady(ctx, sequence)
 		l.mu.RLock()
+		latest = l.latestQR
 		connected = l.client != nil && l.client.IsConnected()
 		deadline = l.pairingDeadline
 		l.mu.RUnlock()
+	}
+
+	// If the calling context is already done (e.g. browser disconnected),
+	// do not attempt a session restart — that would kill the open WebSocket.
+	if ctx.Err() != nil {
+		return PairingSnapshot{}, ctx.Err()
 	}
 
 	if !connected || latest.State != "scan-required" || latest.Code == "" || (!deadline.IsZero() && time.Now().UTC().After(deadline)) {

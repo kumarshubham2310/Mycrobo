@@ -166,6 +166,16 @@ func main() {
 	})
 	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
+		// If the connector is actively connecting/preparing (initial WebSocket
+		// handshake with WhatsApp still in progress), tell the client to retry
+		// rather than calling UseQR which would kill the open socket via
+		// restartPairingSession → Disconnect → EOF loop.
+		if snapshot.State == "preparing" || snapshot.State == "connecting" {
+			response.Header().Set("Cache-Control", "no-store")
+			response.Header().Set("Retry-After", "2")
+			http.Error(response, "pairing code is being prepared, please retry", http.StatusServiceUnavailable)
+			return
+		}
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
 			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
 				snapshot = fresh
