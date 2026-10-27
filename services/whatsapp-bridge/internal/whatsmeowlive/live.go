@@ -26,6 +26,7 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
 	"mycrobo/whatsapp-bridge/internal/bridge"
@@ -34,7 +35,7 @@ import (
 )
 
 func init() {
-	waStore.SetOSInfo("Chrome (Windows)", [3]uint32{0, 1, 0})
+	waStore.SetOSInfo("Chrome (Windows)", waStore.GetWAVersion())
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 }
 
@@ -162,7 +163,7 @@ func open(ctx context.Context, sessionPath string, service *bridge.Service, hexK
 		_ = container.Close()
 		return nil, fmt.Errorf("load linked device: %w", err)
 	}
-	client := whatsmeow.NewClient(device, nil)
+	client := whatsmeow.NewClient(device, waLog.Stdout("Bridge", "INFO", false))
 	live := &Live{client: client, historyPeer: client, container: container, service: service, state: "offline", waiters: make(map[string]chan onDemandResult), mediaQueue: make(chan mediaJob, 256)}
 	live.client.AddEventHandler(func(raw any) { live.handleClientEvent(client, raw) })
 	for range 2 {
@@ -558,7 +559,7 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	if client.Store != nil && client.Store.ID == nil {
 		_ = client.Store.Delete(ctx)
 	}
-	replacement := whatsmeow.NewClient(l.container.NewDevice(), nil)
+	replacement := whatsmeow.NewClient(l.container.NewDevice(), waLog.Stdout("Bridge", "INFO", false))
 	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
 	l.mu.Lock()
 	l.client = replacement
@@ -569,6 +570,7 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Second)
 	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
 		waStore.SetWAVersion(*latestVer)
+		waStore.SetOSInfo("Chrome (Windows)", *latestVer)
 	}
 	fetchCancel()
 
