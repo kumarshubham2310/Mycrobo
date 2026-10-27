@@ -34,7 +34,7 @@ import (
 )
 
 func init() {
-	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
+	waStore.SetOSInfo("Chrome (Windows)", [3]uint32{0, 1, 0})
 	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 }
 
@@ -555,6 +555,9 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.state = "connecting"
 	l.mu.Unlock()
 	client.Disconnect()
+	if client.Store != nil && client.Store.ID == nil {
+		_ = client.Store.Delete(ctx)
+	}
 	replacement := whatsmeow.NewClient(l.container.NewDevice(), nil)
 	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
 	l.mu.Lock()
