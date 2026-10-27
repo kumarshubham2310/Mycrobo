@@ -586,10 +586,19 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.state = "connecting"
 	l.mu.Unlock()
 	client.Disconnect()
-	if client.Store != nil && client.Store.ID == nil {
-		_ = client.Store.Delete(ctx)
+	// Do NOT delete the device store or create a new device identity.
+	// Each NewDevice generates a new noise key pair and registers it with
+	// WhatsApp. Doing this on every restart floods WhatsApp from the same
+	// IP with new companion registrations, triggering server-side rate
+	// limiting ("Couldn't link device" / near-immediate EOF). Reuse the
+	// existing device so WhatsApp sees the same companion retrying, not
+	// a new one each time.
+	existingDevice, devErr := l.container.GetFirstDevice(ctx)
+	if devErr != nil {
+		// Only fall back to a new device if we cannot load the stored one.
+		existingDevice = l.container.NewDevice()
 	}
-	replacement := whatsmeow.NewClient(l.container.NewDevice(), waLog.Stdout("Bridge", "INFO", false))
+	replacement := whatsmeow.NewClient(existingDevice, waLog.Stdout("Bridge", "INFO", false))
 	replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
 	l.mu.Lock()
 	l.client = replacement

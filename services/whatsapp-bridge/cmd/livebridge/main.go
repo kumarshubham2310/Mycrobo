@@ -215,6 +215,12 @@ func main() {
 		_ = json.NewEncoder(response).Encode(snapshot)
 	})
 	root.HandleFunc("POST /v1/link/qr", func(response http.ResponseWriter, request *http.Request) {
+		if p := live.Pairing(); p.State == "preparing" || p.State == "connecting" {
+			response.Header().Set("Cache-Control", "no-store")
+			response.Header().Set("Retry-After", "2")
+			http.Error(response, "pairing code is being prepared, please retry", http.StatusServiceUnavailable)
+			return
+		}
 		snapshot, qrErr := live.UseQR(request.Context())
 		if qrErr != nil {
 			http.Error(response, qrErr.Error(), http.StatusConflict)
