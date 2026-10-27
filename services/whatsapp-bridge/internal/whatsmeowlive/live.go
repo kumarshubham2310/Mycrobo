@@ -227,7 +227,7 @@ func maskedPairingPhone(digits string) string {
 const (
 	pairingSessionLifetime = 155 * time.Second
 	pairingMinimumLifetime = 45 * time.Second
-	pairingReadyTimeout    = 15 * time.Second
+	pairingReadyTimeout    = 20 * time.Second
 )
 
 func pairingFailure(err error) PairingSnapshot {
@@ -312,6 +312,9 @@ func (l *Live) PairPhone(ctx context.Context, phone string) (PairingSnapshot, er
 }
 
 // UseQR restores the newest live QR payload without restarting the connector.
+// If the connector is already actively preparing a QR (just connected, waiting
+// for WhatsApp to issue the first code), it waits up to pairingReadyTimeout
+// for that in-flight QR rather than killing the socket and restarting.
 func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	l.pairMu.Lock()
 	defer l.pairMu.Unlock()
@@ -334,7 +337,28 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	latest := l.latestQR
 	connected := l.client != nil && l.client.IsConnected()
 	deadline := l.pairingDeadline
+	pairingState := l.pairing.State
+	sequence := l.pairingSequence
 	l.mu.RUnlock()
+
+	// If the connector is already live and just waiting for WhatsApp to emit
+	// the first QR code ("preparing" or "connecting" state), wait for it
+	// instead of killing the open WebSocket with a premature restart.
+	if connected && (pairingState == "preparing" || pairingState == "connecting") &&
+		(!deadline.IsZero() && time.Until(deadline) > pairingMinimumLifetime) {
+		if waitErr := l.waitForPairingReady(ctx, sequence); waitErr == nil {
+			// Refresh latest after successful wait
+			l.mu.RLock()
+			latest = l.latestQR
+			l.mu.RUnlock()
+		}
+		// Re-read connected state after wait
+		l.mu.RLock()
+		connected = l.client != nil && l.client.IsConnected()
+		deadline = l.pairingDeadline
+		l.mu.RUnlock()
+	}
+
 	if !connected || latest.State != "scan-required" || latest.Code == "" || (!deadline.IsZero() && time.Now().UTC().After(deadline)) {
 		if err := l.restartPairingSession(ctx); err != nil {
 			failure := pairingFailure(err)
@@ -596,11 +620,15 @@ func (l *Live) waitForPairingReady(ctx context.Context, sequence uint64) error {
 		l.mu.RLock()
 		currentSequence := l.pairingSequence
 		snapshot := l.pairing
+		latestQR := l.latestQR
 		l.mu.RUnlock()
 		if currentSequence != sequence {
 			return errors.New("the WhatsApp linking session changed while it was preparing")
 		}
-		if snapshot.State == "scan-required" && snapshot.Code != "" && l.client.IsConnected() {
+		// Accept QR from either pairing or latestQR (both are updated by consumePairing)
+		qrReady := (snapshot.State == "scan-required" && snapshot.Code != "") ||
+			(latestQR.State == "scan-required" && latestQR.Code != "")
+		if qrReady && l.client.IsConnected() {
 			return nil
 		}
 		if snapshot.State == "blocked-error" || snapshot.State == "retryable-error" || snapshot.State == "expired" {
