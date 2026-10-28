@@ -168,4 +168,8 @@ export class WebAuthManager {
   userCount() {
     return this._readUsers().length;
   }
+
+  hasUsers() {
+    return this._readUsers().length > 0;
+  }
 }

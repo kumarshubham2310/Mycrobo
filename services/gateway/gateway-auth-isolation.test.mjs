@@ -140,5 +140,26 @@ test("gateway enforces tenant isolation between owner and newly registered users
     headers: { authorization: `Bearer ${user2Token}` },
   });
   assert.equal(user2Events.status, 204);
+
+  // 12. Workspace decisions, tasks and follow-ups isolation
+  // Unauthenticated request to /api/v1/workspace must return 401
+  const unauthWorkspace = await fetch(`http://127.0.0.1:${port}/api/v1/workspace`);
+  assert.equal(unauthWorkspace.status, 401);
+
+  // User 2 must see empty workspace queues, never the owner's tasks/decisions/follow-ups
+  const user2WorkspaceRes = await fetch(`http://127.0.0.1:${port}/api/v1/workspace`, {
+    headers: { authorization: `Bearer ${user2Token}` },
+  });
+  assert.equal(user2WorkspaceRes.status, 200);
+  const user2Workspace = await user2WorkspaceRes.json();
+  assert.deepEqual(user2Workspace.pending, []);
+  assert.deepEqual(user2Workspace.tasks, []);
+  assert.deepEqual(user2Workspace.followUps, []);
+
+  // User 2 cannot access chat intelligence for owner's chats
+  const user2Intelligence = await fetch(`http://127.0.0.1:${port}/api/v1/chats/${encodeURIComponent(chatToAccess)}/intelligence`, {
+    headers: { authorization: `Bearer ${user2Token}` },
+  });
+  assert.equal(user2Intelligence.status, 404);
 });
 

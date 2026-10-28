@@ -16,7 +16,7 @@ import { evaluateAutoSendPolicy } from "../../packages/core/auto-send-policy.ts"
 import { createDraftProviderFromEnv } from "./draft-provider.mjs";
 import { createBridgeSource, createBridgeSourceFromEnv } from "./bridge-source.mjs";
 import { buildFollowUpItems, buildPendingItems, buildTaskItems } from "./workspace-items.mjs";
-import { AUTO_SEND_EXECUTION_CONSENT_VERSION, AUTO_SEND_POLICY_VERSION, createUserStateStoreFromEnv } from "./user-state.mjs";
+import { AUTO_SEND_EXECUTION_CONSENT_VERSION, AUTO_SEND_POLICY_VERSION, createUserStateStoreFromEnv, MemoryUserStateStore, SqliteUserStateStore } from "./user-state.mjs";
 import { buildCommunicationDNA, buildSyncTruth, buildVerifiedContext } from "./product-intelligence.mjs";
 import { authorizeGatewayRequest, authorizeSendBroker, contentFreeAuditRecord, createOperationsLogger, createRequestLimiter, opaqueCorrelationId } from "./runtime-security.mjs";
 import { calendarContextForText, contactForChat, enrichChatIdentity, importContextSource, integrationStatus } from "./context-sources.mjs";
@@ -597,6 +597,59 @@ export function createGatewayServer(options = {}) {
     }
     return bridgeSource;
   }
+
+  const authEnforced = Boolean(controlPlane || (webAuth && webAuth.hasUsers()));
+  const callerStateStores = new Map();
+
+  function getUserStateStore(caller) {
+    if (!caller || !caller.authenticated || !caller.tenantId) {
+      return userStateStore;
+    }
+    if (caller.tenantId === tenantId && (!caller.userId || caller.userId === authenticatedUserId)) {
+      return userStateStore;
+    }
+    const storeKey = `${caller.tenantId}:${caller.userId || "default"}`;
+    if (callerStateStores.has(storeKey)) {
+      return callerStateStores.get(storeKey);
+    }
+
+    const tDir = tenantBridgeRegistry?.dataDir(caller.tenantId)
+      || (userDataDir ? resolve(dirname(userDataDir), `tenant-data-${caller.tenantId}`) : null)
+      || (authDataDir ? resolve(authDataDir, `tenant-data-${caller.tenantId}`) : null);
+
+    let store;
+    if (tDir) {
+      try {
+        mkdirSync(tDir, { recursive: true });
+        let key = options.vaultKey || process.env.MYCROBO_USER_STATE_KEY || null;
+        const keyFile = resolve(tDir, "db-key.bin");
+        if (existsSync(keyFile)) {
+          const raw = readFileSync(keyFile, "utf8").trim();
+          if (raw) key = raw;
+        }
+        const resolvedUserId = caller.userId && /^user-[a-f\d]{24}$/u.test(caller.userId)
+          ? caller.userId
+          : `user-${caller.tenantId.slice(7)}00000000`;
+        const userDbDir = resolve(tDir, "users", resolvedUserId);
+        mkdirSync(userDbDir, { recursive: true });
+        store = new SqliteUserStateStore(
+          resolve(userDbDir, "workspace.db"),
+          key,
+          caller.tenantId,
+          resolve(userDbDir, "user-state.json"),
+          resolvedUserId,
+          resolve(tDir, "workspace.db")
+        );
+      } catch {
+        store = new MemoryUserStateStore();
+      }
+    } else {
+      store = new MemoryUserStateStore();
+    }
+
+    callerStateStores.set(storeKey, store);
+    return store;
+  }
   const googleConnector = options.googleConnector || createGoogleContextConnectorFromEnv({
     ...process.env,
     MYCROBO_TENANT_ID: tenantId,
@@ -790,20 +843,24 @@ export function createGatewayServer(options = {}) {
     try { return await googleSyncPromise; } finally { googleSyncPromise = null; }
   }
 
-  async function workspaceItems() {
-    if (bridgeSource?.workspace) return bridgeSource.workspace();
-    return chats.map((chat) => {
-      const view = viewOfChat(chat);
-      return {
-        chat: canonicalChatOf(chat),
-        latest: materializeEvents(chat.id).at(-1) || view.latest,
-        state: { chat_id: chat.id, updated_at: chat.latestVerifiedAt, commitments: [] },
-      };
-    });
+  async function workspaceItems(bridge = null, isSingleTenant = false) {
+    if (bridge?.workspace) return await bridge.workspace();
+    if (isSingleTenant) {
+      if (bridgeSource?.workspace) return await bridgeSource.workspace();
+      return chats.map((chat) => {
+        const view = viewOfChat(chat);
+        return {
+          chat: canonicalChatOf(chat),
+          latest: materializeEvents(chat.id).at(-1) || view.latest,
+          state: { chat_id: chat.id, updated_at: chat.latestVerifiedAt, commitments: [] },
+        };
+      });
+    }
+    return [];
   }
 
-  async function workspacePayload() {
-    const [items, saved] = await Promise.all([workspaceItems(), userStateStore.snapshot()]);
+  async function workspacePayload(bridge = null, store = userStateStore, isSingleTenant = false) {
+    const [items, saved] = await Promise.all([workspaceItems(bridge, isSingleTenant), store.snapshot()]);
     return {
       pending: buildPendingItems(items).filter((item) => saved.decisions?.[item.id]?.status !== "dismissed"),
       tasks: buildTaskItems(items, saved),
@@ -812,29 +869,29 @@ export function createGatewayServer(options = {}) {
     };
   }
 
-  async function syncTruthPayload() {
-    if (!bridgeSource) {
+  async function syncTruthPayload(targetBridge = bridgeSource) {
+    if (!targetBridge) {
       const active = chats.filter((chat) => chat.collection === "active").map(viewOfChat);
       const archived = chats.filter((chat) => chat.collection === "archived").map(viewOfChat);
       return buildSyncTruth({ status: { connected: true, connectionState: "fixture" }, active, archived });
     }
     const [status, active, archived, storage] = await Promise.all([
-      bridgeSource.status(),
-      bridgeSource.listChats("active"),
-      bridgeSource.listChats("archived"),
-      typeof bridgeSource.storage === "function" ? bridgeSource.storage().catch(() => null) : Promise.resolve(null),
+      targetBridge.status(),
+      targetBridge.listChats("active"),
+      targetBridge.listChats("archived"),
+      typeof targetBridge.storage === "function" ? targetBridge.storage().catch(() => null) : Promise.resolve(null),
     ]);
     return buildSyncTruth({ status, active, archived, storage });
   }
 
-  async function intelligencePayload(chatId) {
-    const imported = await userStateStore.integrations();
-    if (bridgeSource) {
+  async function intelligencePayload(chatId, targetBridge = bridgeSource, targetStore = userStateStore) {
+    const imported = await targetStore.integrations();
+    if (targetBridge) {
       const [bundle, conversationState, allEvents, style] = await Promise.all([
-        bridgeSource.bundle(chatId),
-        bridgeSource.conversationState ? bridgeSource.conversationState(chatId) : Promise.resolve(null),
-        bridgeSource.toneEvents(chatId),
-        userStateStore.chatStyle(chatId),
+        targetBridge.bundle(chatId),
+        targetBridge.conversationState ? targetBridge.conversationState(chatId) : Promise.resolve(null),
+        targetBridge.toneEvents ? targetBridge.toneEvents(chatId) : Promise.resolve([]),
+        targetStore.chatStyle(chatId),
       ]);
       const latest = latestVerifiedHumanMessage(bundle.events);
       const contact = contactForChat(bundle.chat, imported.contacts);
@@ -857,7 +914,7 @@ export function createGatewayServer(options = {}) {
     return {
       context: buildVerifiedContext({ ...view, events }, null),
       dna: buildCommunicationDNA(canonical, events, events),
-      style: await userStateStore.chatStyle(chatId),
+      style: await targetStore.chatStyle(chatId),
       externalContext: {
         contact: contact ? { resolved: true, displayName: contact.displayName } : { resolved: false },
         calendar: calendarContextForText(latestVerifiedHumanMessage(events)?.text || "", imported.calendar),
@@ -865,9 +922,9 @@ export function createGatewayServer(options = {}) {
     };
   }
 
-  async function autoSendSubjectsForChat(chatId) {
-    if (bridgeSource) {
-      const bundle = await bridgeSource.bundle(chatId);
+  async function autoSendSubjectsForChat(chatId, targetBridge = bridgeSource) {
+    if (targetBridge) {
+      const bundle = await targetBridge.bundle(chatId);
       const ownerIds = Array.isArray(bundle.ownerIds) && bundle.ownerIds.length ? bundle.ownerIds : ["owner"];
       const personId = bundle.chat?.kind === "direct" ? draftPersonId(bundle.chat, bundle.events, ownerIds) : null;
       return {
@@ -1623,37 +1680,43 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/workspace") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for the workspace." });
-        if (controlPlane) {
-          const caller = callerSession(request);
-          if (caller.authenticated && !caller.isOwner) {
-            return json(response, 200, {
-              tasks: [],
-              followUps: [],
-              pending: [],
-              decisions: [],
-              intelligence: { relationshipCount: 0 },
-            });
-          }
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to view workspace.", code: "AUTHENTICATION_REQUIRED" });
         }
-        return json(response, 200, await workspacePayload());
+        if (controlPlane && caller.authenticated && !caller.isOwner) {
+          return json(response, 200, {
+            tasks: [],
+            followUps: [],
+            pending: [],
+            decisions: [],
+            intelligence: { relationshipCount: 0 },
+          });
+        }
+        const isSingleTenant = !authEnforced;
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        return json(response, 200, await workspacePayload(bridge, store, isSingleTenant));
       }
       if (url.pathname === "/api/v1/preferences") {
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         const autonomyAction = String(url.searchParams.get("autonomy") || "").trim();
         if (autonomyAction) {
-          if (request.method === "GET" && autonomyAction === "policy") return json(response, 200, await tenantAutonomyPayload());
+          if (request.method === "GET" && autonomyAction === "policy") return json(response, 200, await tenantAutonomyPayload(store));
           if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for automatic delivery configuration." });
           try {
             const input = await readJSON(request, 4_096);
             if (autonomyAction === "policy") {
               assertInputKeys(input, ["mode", "allowGroups"]);
-              await userStateStore.setAutoSendPolicyLayer({
+              await store.setAutoSendPolicyLayer({
                 layerKind: "tenant",
                 mode: input.mode,
                 allowGroups: input.allowGroups === true,
               });
             } else if (autonomyAction === "grant") {
               assertInputKeys(input, ["confirmed", "consentVersion", "policyVersion"]);
-              await userStateStore.grantAutoSendExecutionConsent({
+              await store.grantAutoSendExecutionConsent({
                 version: input.consentVersion,
                 policyVersion: input.policyVersion,
                 buildVersion: trustedBuildVersion,
@@ -1662,34 +1725,36 @@ export function createGatewayServer(options = {}) {
             } else if (["revoke", "emergency-stop"].includes(autonomyAction)) {
               assertInputKeys(input, ["confirmed"]);
               if (input.confirmed !== true) throw new Error("Confirm this automatic delivery safety action explicitly.");
-              await userStateStore.revokeAutoSendExecutionConsent();
+              await store.revokeAutoSendExecutionConsent();
             } else {
               return json(response, 400, { error: "Choose a valid automatic delivery configuration action." });
             }
-            return json(response, 200, await tenantAutonomyPayload());
+            return json(response, 200, await tenantAutonomyPayload(store));
           } catch (error) {
             return json(response, 400, { error: error instanceof Error ? error.message : "Automatic delivery configuration is invalid." });
           }
         }
-        if (request.method === "GET") return json(response, 200, await userStateStore.preferences());
+        if (request.method === "GET") return json(response, 200, await store.preferences());
         if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for preferences." });
         try {
-          return json(response, 200, await userStateStore.setPreferences(await readJSON(request)));
+          return json(response, 200, await store.setPreferences(await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Preferences are invalid." });
         }
       }
       if (url.pathname === "/api/v1/autonomy") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for sending safeguards." });
-        return json(response, 200, await tenantAutonomyPayload());
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
+        return json(response, 200, await tenantAutonomyPayload(store));
       }
       if (url.pathname.startsWith("/api/v1/chats/")) {
-        if (controlPlane) {
-          const caller = callerSession(request);
+        const caller = callerSession(request);
+        if (authEnforced) {
           if (!caller.authenticated) {
             return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
           }
-          if (!caller.isOwner) {
+          if (controlPlane && !caller.isOwner) {
             return json(response, 404, { error: "Chat not found in your workspace." });
           }
         }
@@ -1698,8 +1763,11 @@ export function createGatewayServer(options = {}) {
       if (autonomyMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for conversation sending safeguards." });
         const chatId = decodeURIComponent(autonomyMatch[1]);
+        const caller = callerSession(request);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 200, await chatAutonomyPayload(chatId));
+          return json(response, 200, await chatAutonomyPayload(chatId, bridge, store));
         } catch (error) {
           return json(response, 404, { error: error instanceof Error ? error.message : "Conversation policy is unavailable." });
         }
@@ -1707,8 +1775,15 @@ export function createGatewayServer(options = {}) {
       const intelligenceMatch = /^\/api\/v1\/chats\/([^/]+)\/intelligence$/u.exec(url.pathname);
       if (intelligenceMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for verified context." });
+        const caller = callerSession(request);
+        const chatId = decodeURIComponent(intelligenceMatch[1]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge && authEnforced) {
+          return json(response, 404, { error: "Chat not found in your workspace." });
+        }
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 200, await intelligencePayload(decodeURIComponent(intelligenceMatch[1])));
+          return json(response, 200, await intelligencePayload(chatId, bridge, store));
         } catch (error) {
           return json(response, 404, { error: error instanceof Error ? error.message : "Verified context is unavailable." });
         }
@@ -1716,9 +1791,12 @@ export function createGatewayServer(options = {}) {
       const styleMatch = /^\/api\/v1\/chats\/([^/]+)\/style$/u.exec(url.pathname);
       if (styleMatch) {
         const chatId = decodeURIComponent(styleMatch[1]);
+        const caller = callerSession(request);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
         if (url.searchParams.get("autonomy") === "policy") {
           if (request.method === "GET") {
-            try { return json(response, 200, await chatAutonomyPayload(chatId)); }
+            try { return json(response, 200, await chatAutonomyPayload(chatId, bridge, store)); }
             catch (error) { return json(response, 404, { error: error instanceof Error ? error.message : "Conversation policy is unavailable." }); }
           }
           if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for the conversation delivery policy." });
@@ -1727,30 +1805,30 @@ export function createGatewayServer(options = {}) {
             assertInputKeys(input, ["scope", "mode"]);
             const scope = String(input.scope || "");
             if (!["chat", "relationship"].includes(scope)) throw new Error("Choose this conversation or this relationship for the delivery policy.");
-            const subjects = await autoSendSubjectsForChat(chatId);
+            const subjects = await autoSendSubjectsForChat(chatId, bridge);
             const subjectId = scope === "chat" ? subjects.chatSubjectId : subjects.relationshipSubjectId;
             if (!subjectId) throw new Error("A relationship-wide policy is available only for a verified direct conversation.");
             if (input.mode === "inherit") {
-              await userStateStore.removeAutoSendPolicyLayer(scope, subjectId);
+              await store.removeAutoSendPolicyLayer(scope, subjectId);
             } else {
-              await userStateStore.setAutoSendPolicyLayer({ layerKind: scope, subjectId, mode: input.mode, allowGroups: false });
+              await store.setAutoSendPolicyLayer({ layerKind: scope, subjectId, mode: input.mode, allowGroups: false });
             }
-            const style = await userStateStore.chatStyle(chatId);
+            const style = await store.chatStyle(chatId);
             if (scope === "relationship") {
-              await userStateStore.removeAutoSendPolicyLayer("chat", subjects.chatSubjectId);
-              await userStateStore.setChatStyle(chatId, { ...style, sendingMode: "inherit" });
+              await store.removeAutoSendPolicyLayer("chat", subjects.chatSubjectId);
+              await store.setChatStyle(chatId, { ...style, sendingMode: "inherit" });
             } else {
-              await userStateStore.setChatStyle(chatId, { ...style, sendingMode: input.mode });
+              await store.setChatStyle(chatId, { ...style, sendingMode: input.mode });
             }
-            return json(response, 200, await chatAutonomyPayload(chatId));
+            return json(response, 200, await chatAutonomyPayload(chatId, bridge, store));
           } catch (error) {
             return json(response, 400, { error: error instanceof Error ? error.message : "Conversation delivery policy is invalid." });
           }
         }
-        if (request.method === "GET") return json(response, 200, await userStateStore.chatStyle(chatId));
+        if (request.method === "GET") return json(response, 200, await store.chatStyle(chatId));
         if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for conversation style." });
         try {
-          return json(response, 200, await userStateStore.setChatStyle(chatId, await readJSON(request)));
+          return json(response, 200, await store.setChatStyle(chatId, await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Conversation style is invalid." });
         }
@@ -1758,8 +1836,10 @@ export function createGatewayServer(options = {}) {
       const feedbackMatch = /^\/api\/v1\/chats\/([^/]+)\/draft-feedback$/u.exec(url.pathname);
       if (feedbackMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST for draft feedback." });
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 201, await userStateStore.recordDraftFeedback(decodeURIComponent(feedbackMatch[1]), await readJSON(request)));
+          return json(response, 201, await store.recordDraftFeedback(decodeURIComponent(feedbackMatch[1]), await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Draft feedback is invalid." });
         }
@@ -1767,6 +1847,8 @@ export function createGatewayServer(options = {}) {
       const outcomeMatch = /^\/api\/v1\/chats\/([^/]+)\/personalization-outcome$/u.exec(url.pathname);
       if (outcomeMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST for a draft outcome." });
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         try {
           const chatId = decodeURIComponent(outcomeMatch[1]);
           const input = await readJSON(request);
@@ -1782,7 +1864,7 @@ export function createGatewayServer(options = {}) {
                 ? { outcome: "dismissed", editRatio: null }
                 : null;
           if (!terminal) return json(response, 400, { error: "Choose a valid final draft outcome." });
-          const saved = await userStateStore.recordPersonalizationOutcome({ ...binding, ...terminal });
+          const saved = await store.recordPersonalizationOutcome({ ...binding, ...terminal });
           draftLearningLedger.delete(binding.draftId);
           return json(response, 201, { outcome: saved.outcome, editRatio: saved.editRatio, contentStored: false });
         } catch (error) {
@@ -1792,11 +1874,18 @@ export function createGatewayServer(options = {}) {
       const taskMatch = /^\/api\/v1\/(tasks|followups)\/([^/]+)$/u.exec(url.pathname);
       if (taskMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to update this item." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const collection = taskMatch[1] === "followups" ? "followUps" : "tasks";
         const taskId = decodeURIComponent(taskMatch[2]);
         const input = await readJSON(request);
         const status = typeof input.status === "string" ? input.status : "";
-        const [current, savedSnapshot] = await Promise.all([workspacePayload(), userStateStore.snapshot()]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        const isSingleTenant = !authEnforced;
+        const [current, savedSnapshot] = await Promise.all([workspacePayload(bridge, store, isSingleTenant), store.snapshot()]);
         const task = current[collection]?.find((item) => item.id === taskId)
           || current.tasks?.find((item) => item.id === taskId)
           || current.followUps?.find((item) => item.id === taskId)
@@ -1804,7 +1893,7 @@ export function createGatewayServer(options = {}) {
         if (!task) return json(response, 404, { error: "This evidence-backed item is no longer current." });
         let saved;
         try {
-          saved = await userStateStore.setTaskStatus(taskId, status, new Date(), { snoozedUntil: input.snoozedUntil });
+          saved = await store.setTaskStatus(taskId, status, new Date(), { snoozedUntil: input.snoozedUntil });
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Task status is invalid." });
         }
@@ -1813,15 +1902,22 @@ export function createGatewayServer(options = {}) {
       const decisionMatch = /^\/api\/v1\/decisions\/([^/]+)$/u.exec(url.pathname);
       if (decisionMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to update this decision." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const decisionId = decodeURIComponent(decisionMatch[1]);
         const input = await readJSON(request);
         const status = typeof input.status === "string" ? input.status : "";
-        const [items, savedSnapshot] = await Promise.all([workspaceItems(), userStateStore.snapshot()]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        const isSingleTenant = !authEnforced;
+        const [items, savedSnapshot] = await Promise.all([workspaceItems(bridge, isSingleTenant), store.snapshot()]);
         const knownDecision = buildPendingItems(items).some((item) => item.id === decisionId)
           || Boolean(savedSnapshot.decisions?.[decisionId]);
         if (!knownDecision) return json(response, 404, { error: "This decision is no longer current." });
         try {
-          const saved = await userStateStore.setDecisionStatus(decisionId, status, new Date());
+          const saved = await store.setDecisionStatus(decisionId, status, new Date());
           return json(response, 200, { decisionId, ...saved });
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Decision status is invalid." });
@@ -1834,7 +1930,8 @@ export function createGatewayServer(options = {}) {
         }
         const collection = url.searchParams.get("collection") ?? "active";
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
-        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.listChats(collection)) });
+        const store = getUserStateStore(caller);
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.listChats(collection), store) });
         return json(response, 200, { collection, chats: [] });
       }
       if (url.pathname === "/api/v1/connect") {
@@ -1856,7 +1953,8 @@ export function createGatewayServer(options = {}) {
         const query = (url.searchParams.get("q") || "").trim();
         if ([...query].length < 2) return json(response, 400, { error: "Enter at least two characters." });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
-        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.searchChats(collection, query)) });
+        const store = getUserStateStore(caller);
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.searchChats(collection, query), store) });
         return json(response, 200, { collection, chats: [] });
       }
       const chatMatch = /^\/api\/v1\/chats\/([^/]+)\/(messages|latest|draft|send-approval|send)$/u.exec(url.pathname);
