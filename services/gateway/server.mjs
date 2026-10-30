@@ -499,6 +499,8 @@ export function createGatewayServer(options = {}) {
     return "";
   }
 
+  const authEnforced = Boolean(controlPlane || (webAuth && webAuth.hasUsers()));
+
   function callerSession(req) {
     const token = extractBearerToken(req);
     if (webAuth && token) {
@@ -533,29 +535,57 @@ export function createGatewayServer(options = {}) {
       }
     }
     if (controlPlane) {
-      if (!token) {
-        return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+      if (token) {
+        try {
+          const session = controlPlane.sessionFromToken(token);
+          if (session) {
+            const callerTenantId = session.tenant?.id;
+            const callerRole = session.tenant?.role;
+            const isPlatformAdmin = session.user?.platformAdmin === true;
+            const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
+            const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
+            return {
+              authenticated: true,
+              isOwner: true,
+              isWorkspaceOwner,
+              tenantId: callerTenantId || tenantId,
+              userId: session.user?.id,
+              session,
+              role: effectiveRole,
+            };
+          }
+        } catch {}
       }
-      try {
-        const session = controlPlane.sessionFromToken(token);
-        if (!session) return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
-        const callerTenantId = session.tenant?.id;
-        const callerRole = session.tenant?.role;
-        const isPlatformAdmin = session.user?.platformAdmin === true;
-        const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
-        const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
-        return {
-          authenticated: true,
-          isOwner: true,
-          isWorkspaceOwner,
-          tenantId: callerTenantId || tenantId,
-          userId: session.user?.id,
-          session,
-          role: effectiveRole,
-        };
-      } catch {
-        return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
-      }
+    }
+    if (securityPolicy.token && token && token === securityPolicy.token) {
+      return {
+        authenticated: true,
+        isOwner: authenticatedRole === "owner",
+        isWorkspaceOwner: authenticatedRole === "owner",
+        tenantId: tenantId || "development-tenant",
+        userId: authenticatedUserId || "development-user",
+        session: {
+          id: `desktop-session-${authenticatedUserId || "default"}`,
+          user: { id: authenticatedUserId || "development-user", status: "active" },
+          tenant: { id: tenantId || "development-tenant", role: authenticatedRole || "owner", status: "active" },
+        },
+        role: authenticatedRole || "owner",
+      };
+    }
+    if (!authEnforced) {
+      return {
+        authenticated: true,
+        isOwner: true,
+        isWorkspaceOwner: true,
+        tenantId: tenantId || "development-tenant",
+        userId: authenticatedUserId || "development-user",
+        session: {
+          id: `default-session-${authenticatedUserId || "default"}`,
+          user: { id: authenticatedUserId || "development-user", status: "active" },
+          tenant: { id: tenantId || "development-tenant", role: "owner", status: "active" },
+        },
+        role: authenticatedRole || "owner",
+      };
     }
     return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
   }
@@ -584,8 +614,8 @@ export function createGatewayServer(options = {}) {
 
   async function getBridgeForRequest(req, { spawnIfNeeded = false } = {}) {
     const caller = callerSession(req);
-    const targetTenant = caller.tenantId;
-    if (!targetTenant) return null;
+    const targetTenant = caller.tenantId || tenantId;
+    if (!targetTenant) return bridgeSource;
     if (tenantBridgeRegistry) {
       if (spawnIfNeeded) {
         return await tenantBridgeRegistry.getOrSpawn(targetTenant);
@@ -598,7 +628,6 @@ export function createGatewayServer(options = {}) {
     return bridgeSource;
   }
 
-  const authEnforced = Boolean(controlPlane || (webAuth && webAuth.hasUsers()));
   const callerStateStores = new Map();
 
   function getUserStateStore(caller) {
@@ -1524,13 +1553,13 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname.startsWith("/api/v1/pairing-")) {
         const caller = callerSession(request);
-        if (!caller.authenticated) {
+        if (authEnforced && !caller.authenticated) {
           return json(response, 401, { error: "Authentication required to pair WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
         }
       }
       if (url.pathname === "/api/v1/pairing-qr") {
         const caller = callerSession(request);
-        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
         if (!bridge?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
         try {
@@ -1555,7 +1584,7 @@ export function createGatewayServer(options = {}) {
       if (url.pathname === "/api/v1/pairing-phone") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to request a phone linking code." });
         const caller = callerSession(request);
-        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
         if (!bridge?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
         const input = await readJSON(request, 1024);
@@ -1570,7 +1599,7 @@ export function createGatewayServer(options = {}) {
       if (url.pathname === "/api/v1/pairing-use-qr") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to switch to QR linking." });
         const caller = callerSession(request);
-        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
         if (!bridge?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
         try {
@@ -1582,7 +1611,7 @@ export function createGatewayServer(options = {}) {
       if (url.pathname === "/api/v1/pairing-restart") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to start a fresh linking session." });
         const caller = callerSession(request);
-        if (!caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
         if (!bridge?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
         try {
@@ -1937,7 +1966,7 @@ export function createGatewayServer(options = {}) {
       if (url.pathname === "/api/v1/connect") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect." });
         const caller = callerSession(request);
-        if (!caller.authenticated) {
+        if (authEnforced && !caller.authenticated) {
           return json(response, 401, { error: "Authentication required to connect WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
         }
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
