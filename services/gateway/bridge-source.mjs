@@ -525,7 +525,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
     async pairingQR() {
       const response = await fetch(`${base}/v1/link/qr.png`, {
         headers: bridgeHeaders(apiToken, { accept: "image/png" }),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(`Pairing code is unavailable (${response.status}).`);
       return { bytes: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get("content-type") || "image/png" };

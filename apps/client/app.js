@@ -2755,6 +2755,7 @@ if (webSession?.surface === "closed-pilot-web") {
   function renderPhoneCode(status, pairing) {
     const cells = pairingCodeCells(pairing.phoneCode);
     if (!cells.length) return renderPairingError(status, "WhatsApp returned an invalid or expired phone code.");
+    if (setupPanel.dataset.mode === `phone-code:${pairing.phoneCode}`) return;
     state.pairingMethod = "phone";
     setupPanel.dataset.mode = `phone-code:${pairing.phoneCode}`;
     setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("phone")}<span class="step">One-time WhatsApp code</span><h1>Enter this code on your phone</h1><p>Linking the account ending ${escapeHtml(pairing.phoneMasked || "in your number")}</p><div class="phoneCode" aria-label="WhatsApp linking code ${escapeHtml(cells.join(" "))}">${cells.map((cell, index) => `${index === 4 ? '<i aria-hidden="true">–</i>' : ""}<b>${escapeHtml(cell)}</b>`).join("")}</div><p class="pairingExpiry" id="pairingExpiry"></p><ol class="pairingSteps"><li><span>1</span><p>Open <strong>WhatsApp</strong> on your phone.</p></li><li><span>2</span><p>Android: tap <strong>Menu</strong>. iPhone: tap <strong>Settings</strong>.</p></li><li><span>3</span><p>Tap <strong>Linked devices</strong>, then <strong>Link a device</strong>.</p></li><li><span>4</span><p>Tap <strong>Link with phone number instead</strong> and enter the code above.</p></li></ol><button type="button" class="setupSecondary" id="differentPhone">Use a different number</button><button type="button" class="setupSecondary hidden" id="newPhoneCode">Get a new code</button><small>No message is sent by linking. MyCrobo will continue automatically after WhatsApp confirms the device.</small></div>`;
@@ -2765,6 +2766,7 @@ if (webSession?.surface === "closed-pilot-web") {
   }
 
   function renderQRPairing(status, pairing) {
+    if (setupPanel.dataset.mode === `scan-required:${pairing.qrImage}`) return;
     stopPairingClock();
     clearInterval(state.qrRefreshInterval);
     state.pairingMethod = "qr";
@@ -2837,6 +2839,7 @@ if (webSession?.surface === "closed-pilot-web") {
     }, 15000);
 
     document.querySelector("#refreshQR")?.addEventListener("click", async () => {
+      delete setupPanel.dataset.mode;
       const button = document.querySelector("#refreshQR");
       if (button) {
         button.disabled = true;
