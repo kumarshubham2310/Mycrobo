@@ -165,6 +165,10 @@ func main() {
 	})
 	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
+		if live.IsLinked() {
+			http.Error(response, "device is already linked", http.StatusConflict)
+			return
+		}
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
 			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
 				snapshot = fresh

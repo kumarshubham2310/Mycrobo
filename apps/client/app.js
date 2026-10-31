@@ -2877,6 +2877,7 @@ if (webSession?.surface === "closed-pilot-web") {
     setupPanel.classList.remove("hidden");
     const pairing = status.pairing || {};
     if (status.connectionState === "account-verification-required" || status.connectionState === "reauth-required") {
+      if (pairing.state === "paired") return;
       if (pairing.state === "scan-required" && pairing.qrImage) {
         const mode = state.pairingMethod === "phone" ? "phone-entry" : `scan-required:${pairing.qrImage}`;
         if (setupPanel.dataset.mode === mode) return;
@@ -2918,7 +2919,7 @@ if (webSession?.surface === "closed-pilot-web") {
       renderPairingRecovery(status, pairing);
       return;
     }
-    if (status.connectionState === "connecting" || status.connectionState === "catching-up" || pairing.state === "preparing") {
+    if (status.connectionState === "connecting" || status.connectionState === "catching-up" || pairing.state === "preparing" || pairing.state === "paired") {
       stopPairingClock();
       if (setupPanel.dataset.mode === "connecting") return;
       setupPanel.dataset.mode = "connecting";

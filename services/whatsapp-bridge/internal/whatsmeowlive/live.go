@@ -312,6 +312,12 @@ func (l *Live) PairPhone(ctx context.Context, phone string) (PairingSnapshot, er
 }
 
 // UseQR restores the newest live QR payload without restarting the connector.
+func (l *Live) IsLinked() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.client != nil && l.client.Store != nil && l.client.Store.ID != nil
+}
+
 // If the connector is already actively preparing a QR (just connected, waiting
 // for WhatsApp to issue the first code), it waits up to pairingReadyTimeout
 // for that in-flight QR rather than killing the socket and restarting.
@@ -322,7 +328,7 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 		l.mu.RLock()
 		currentState := l.state
 		l.mu.RUnlock()
-		if currentState == "reauth-required" || currentState == "account-verification-required" || currentState == "offline" {
+		if currentState == "reauth-required" {
 			l.pairMu.Unlock()
 			err := l.Logout(ctx)
 			l.pairMu.Lock()
@@ -389,7 +395,7 @@ func (l *Live) RestartPairing(ctx context.Context) (PairingSnapshot, error) {
 		l.mu.RLock()
 		currentState := l.state
 		l.mu.RUnlock()
-		if currentState == "reauth-required" || currentState == "account-verification-required" || currentState == "offline" {
+		if currentState == "reauth-required" {
 			l.pairMu.Unlock()
 			err := l.Logout(ctx)
 			l.pairMu.Lock()
@@ -706,6 +712,13 @@ func (l *Live) consumePairing(ctx context.Context, items <-chan whatsmeow.QRChan
 			if l.pairing.State != "phone-code" || snapshot.State != "scan-required" {
 				l.pairing = snapshot
 			}
+			if snapshot.State == "paired" {
+				l.state = "connecting"
+				client := l.client
+				l.mu.Unlock()
+				l.reconnectAfterPairing(client)
+				continue
+			}
 			l.mu.Unlock()
 		case <-ctx.Done():
 			return
@@ -864,6 +877,37 @@ func (l *Live) currentAccountClient(ctx context.Context) (*whatsmeow.Client, err
 	return client, nil
 }
 
+func (l *Live) reconnectAfterPairing(client *whatsmeow.Client) {
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		l.connectMu.Lock()
+		defer l.connectMu.Unlock()
+		l.mu.RLock()
+		c := l.client
+		runCtx := l.runCtx
+		l.mu.RUnlock()
+		if c == nil || c != client {
+			return
+		}
+		if c.IsConnected() {
+			c.Disconnect()
+			time.Sleep(150 * time.Millisecond)
+		}
+		if runCtx == nil {
+			runCtx = context.Background()
+		}
+		for attempt := 0; attempt < 5; attempt++ {
+			if c.IsConnected() {
+				return
+			}
+			if err := c.ConnectContext(runCtx); err == nil {
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}()
+}
+
 func (l *Live) handleClientEvent(client *whatsmeow.Client, raw any) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -880,10 +924,28 @@ func (l *Live) handleClientEvent(client *whatsmeow.Client, raw any) {
 		}
 	}
 	switch event := raw.(type) {
+	case *events.PairSuccess:
+		l.mu.Lock()
+		l.pairing = PairingSnapshot{State: "paired"}
+		l.state = "connecting"
+		l.mu.Unlock()
+		l.reconnectAfterPairing(client)
+	case *events.PairError:
+		l.mu.Lock()
+		snapshot := PairingSnapshot{
+			State:       "retryable-error",
+			FailureCode: "provider-pairing-error",
+			Retryable:   true,
+			Error:       "WhatsApp pairing failed: " + event.Error.Error(),
+		}
+		l.pairing = snapshot
+		l.state = "offline"
+		l.mu.Unlock()
 	case *events.Connected:
 		l.mu.Lock()
 		l.connectionEpoch = fmt.Sprintf("%d", time.Now().UnixNano())
 		l.state = "catching-up"
+		l.pairing = PairingSnapshot{State: "paired"}
 		l.caughtUpAt = nil
 		l.mu.Unlock()
 	case *events.OfflineSyncCompleted:
@@ -898,9 +960,11 @@ func (l *Live) handleClientEvent(client *whatsmeow.Client, raw any) {
 		}
 	case *events.Disconnected:
 		l.mu.Lock()
-		l.connectionEpoch = fmt.Sprintf("%d", time.Now().UnixNano())
-		l.state = "offline"
-		l.caughtUpAt = nil
+		if l.pairing.State != "paired" || l.state != "connecting" {
+			l.connectionEpoch = fmt.Sprintf("%d", time.Now().UnixNano())
+			l.state = "offline"
+			l.caughtUpAt = nil
+		}
 		l.mu.Unlock()
 	case *events.LoggedOut:
 		l.setState("reauth-required")
