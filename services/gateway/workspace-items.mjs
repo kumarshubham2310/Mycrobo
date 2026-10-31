@@ -7,6 +7,7 @@ const NON_DELIVERABLE_PROMISE = /\b(?:pray|hope|wish|miss|remember|think|sleep|r
 const COMPOSITE_PROMISE_CONTINUATION = /\b(?:and(?: then)?|then|after(?: that)?|before(?: that)?|but)\b[\s\S]{1,100}\p{L}/iu;
 const BROADCAST_SIGNAL = /\b(?:subscribe|follow (?:us|on)|channel|releasing|launching|register now|limited offer|warm regards|wishing you|forwarded many times|donation|official page|telegram|instagram|facebook|youtube channel)\b/iu;
 const URL_PATTERN = /https?:\/\/\S+/giu;
+const GENERIC_ACK_OR_CLOSURE = /^(?:ok(?:ay)?|got it|noted|thanks?|thank you|haan|han|hmm+|yep|yeah|sure|thik hai|theek hai|k|cool|alright|done|great|perfect|super|shukriya|dhanyawad)[.! ]*$/iu;
 const DECISION_FRESHNESS_MS = 45 * 86_400_000;
 const WORK_ITEM_FRESHNESS_MS = 45 * 86_400_000;
 
@@ -73,12 +74,13 @@ function matchesChat(chat, targetChatId) {
   return false;
 }
 
-function presentationState(saved = {}, nowMs = Date.now(), observedAt = "") {
+function presentationState(saved = {}, nowMs = Date.now(), observedAt = "", autoStatus = "pending") {
   if (saved.status === "snoozed") {
     const wake = Date.parse(saved.snoozedUntil || "");
     return Number.isFinite(wake) && wake > nowMs ? "snoozed" : "pending";
   }
   if (["pending", "done", "dismissed"].includes(saved.status)) return saved.status;
+  if (autoStatus === "done") return "done";
   const observed = Date.parse(observedAt || "");
   return Number.isFinite(observed) && nowMs - observed > WORK_ITEM_FRESHNESS_MS ? "stale" : "pending";
 }
@@ -118,13 +120,20 @@ export function buildPendingItems(workspaceItems = [], { nowMs = Date.now() } = 
     }
     // A question can remain unresolved even after a newer message arrives. Keep
     // it in the decision queue, but only when immutable evidence says the other
-    // person asked it and the state engine still marks it current.
+    // person asked it and the state engine still marks it current, and no answer
+    // has been given yet.
     for (const question of item?.state?.open_questions || []) {
       const sourceId = question.provenance?.source_message_id || question.id;
       if (question.asked_by_owner === true || question.status !== "current" || seen.has(sourceId)) continue;
       const occurred = Date.parse(question.provenance?.occurred_at || "");
       const questionText = clean(question.question || question.provenance?.original_wording);
       if (!ageIsCurrent(occurred, nowMs) || !asksForOwnerInput(questionText)) continue;
+      // If the owner has already sent a message after this question occurred, the loop is answered.
+      if (latest?.direction === "owner" && Number(latest?.timestampMs) >= occurred) continue;
+      // If the conversation is waiting on the contact after this question, the owner already answered.
+      if (item?.state?.conversation_status === "awaiting_contact" && Number(latest?.timestampMs || 0) >= occurred) continue;
+      // If the contact sent an acknowledgement/closure after the question, the loop was answered.
+      if (latest?.direction === "contact" && latest?.id !== sourceId && Number(latest?.timestampMs || 0) > occurred && GENERIC_ACK_OR_CLOSURE.test(clean(latest.text))) continue;
       pending.push({
         id: `${chat.id}:${sourceId}`,
         chat,
@@ -166,8 +175,14 @@ export function buildTaskItems(workspaceItems = [], taskState = { tasks: {} }, {
       // the loop manually.
       if (!action || isPureNonDeliverablePromise(action)) continue;
       const observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
+      const observedMs = occurredAt(observedAt);
       const expiresAt = Date.parse(commitment.expires_at || "");
       if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
+      const latest = item?.latest;
+      const contactAcknowledged = latest?.direction === "contact"
+        && Number(latest?.timestampMs) > observedMs
+        && GENERIC_ACK_OR_CLOSURE.test(clean(latest.text));
+      const autoStatus = contactAcknowledged ? "done" : "pending";
       const id = `${chat.id}:${commitment.id}`;
       const saved = taskState.tasks?.[id] || {};
       tasks.push({
@@ -179,7 +194,7 @@ export function buildTaskItems(workspaceItems = [], taskState = { tasks: {} }, {
         observedAt,
         expiresAt: commitment.expires_at || null,
         evidenceConfidence: Number(commitment.provenance?.confidence || 0),
-        status: presentationState(saved, nowMs, observedAt),
+        status: presentationState(saved, nowMs, observedAt, autoStatus),
         confirmedAt: saved.confirmedAt || null,
         snoozedUntil: saved.snoozedUntil || null,
       });
@@ -207,8 +222,14 @@ export function buildFollowUpItems(workspaceItems = [], taskState = { tasks: {} 
       const waitingOnOtherPerson = commitment.actor_is_owner === false && Boolean(action);
       if (!waitingOnOtherPerson) continue;
       const observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
+      const observedMs = occurredAt(observedAt);
       const expiresAt = Date.parse(commitment.expires_at || "");
       if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
+      const latest = item?.latest;
+      const ownerAcknowledged = latest?.direction === "owner"
+        && Number(latest?.timestampMs) > observedMs
+        && GENERIC_ACK_OR_CLOSURE.test(clean(latest.text));
+      const autoStatus = ownerAcknowledged ? "done" : "pending";
       const id = `${chat.id}:followup:${commitment.id}`;
       const saved = taskState.tasks?.[id] || {};
       followUps.push({
@@ -221,7 +242,7 @@ export function buildFollowUpItems(workspaceItems = [], taskState = { tasks: {} 
         observedAt,
         expiresAt: commitment.expires_at || null,
         evidenceConfidence: Number(commitment.provenance?.confidence || 0),
-        status: presentationState(saved, nowMs, observedAt),
+        status: presentationState(saved, nowMs, observedAt, autoStatus),
         confirmedAt: saved.confirmedAt || null,
         snoozedUntil: saved.snoozedUntil || null,
       });

@@ -311,15 +311,15 @@ h1, h2, p { margin:0; }
 .workActions button { min-height:40px; padding:0 13px; border:0; border-radius:10px; color:#fff; background:var(--green); font-size:12px; font-weight:850; white-space:nowrap; }
 .workActions button.secondary { color:#315346; border:1px solid #d3e0d9; background:#f0f5f2; }
 .taskStatus { display:inline-block; margin-top:8px; padding:4px 8px; border-radius:999px; color:#315346; background:#edf5f0; font-size:9px; font-weight:900; letter-spacing:.04em; text-transform:uppercase; }
-:is(.dismissedSection,.snoozedSection,.staleSection) { overflow:hidden; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.7); }
-:is(.dismissedSection,.snoozedSection,.staleSection) summary { min-height:52px; display:flex; align-items:center; gap:9px; padding:0 16px; color:#496158; list-style:none; cursor:pointer; font-size:13px; font-weight:850; }
-:is(.dismissedSection,.snoozedSection,.staleSection) summary::-webkit-details-marker { display:none; }
-:is(.dismissedSection,.snoozedSection,.staleSection) summary::after { content:"›"; width:22px; height:22px; display:grid; flex:0 0 22px; place-items:center; border-radius:7px; color:var(--green); background:var(--pale); font-size:18px; transition:transform .16s ease; }
-:is(.dismissedSection,.snoozedSection,.staleSection)[open] summary::after { transform:rotate(90deg); }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection) { overflow:hidden; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.7); }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection) summary { min-height:52px; display:flex; align-items:center; gap:9px; padding:0 16px; color:#496158; list-style:none; cursor:pointer; font-size:13px; font-weight:850; }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection) summary::-webkit-details-marker { display:none; }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection) summary::after { content:"›"; width:22px; height:22px; display:grid; flex:0 0 22px; place-items:center; border-radius:7px; color:var(--green); background:var(--pale); font-size:18px; transition:transform .16s ease; }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection)[open] summary::after { transform:rotate(90deg); }
 .dismissedCount { min-width:23px; height:23px; display:grid; place-items:center; padding:0 6px; border-radius:999px; color:#53675e; background:#e5ece8; font-size:10px; }
 .dismissedHint { margin-left:auto; color:var(--muted2); font-size:11px; font-weight:700; }
-:is(.dismissedSection,.snoozedSection,.staleSection)[open] .dismissedHint { font-size:0; }
-:is(.dismissedSection,.snoozedSection,.staleSection)[open] .dismissedHint::after { content:"Hide"; font-size:11px; }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection)[open] .dismissedHint { font-size:0; }
+:is(.doneSection,.dismissedSection,.snoozedSection,.staleSection)[open] .dismissedHint::after { content:"Hide"; font-size:11px; }
 .dismissedList { display:grid; gap:9px; padding:0 10px 10px; border-top:1px solid var(--soft); }
 .dismissedList .workItem { margin-top:9px; box-shadow:none; background:#f9fbfa; }
 .toastRegion { position:absolute; right:22px; bottom:20px; z-index:30; max-width:min(420px,calc(100% - 32px)); pointer-events:none; }

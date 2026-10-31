@@ -208,3 +208,60 @@ test("queue builders match chat by connectorIds and alias formats", () => {
   assert.equal(tasks.length, 1);
   assert.equal(followUps.length, 1);
 });
+
+test("closing loops for which answer or acknowledgement is already given", () => {
+  const askMs = Date.parse("2026-08-26T10:00:00Z");
+  const replyMs = Date.parse("2026-08-26T10:05:00Z");
+  const ackMs = Date.parse("2026-08-26T10:06:00Z");
+  const nowMs = Date.parse("2026-08-26T10:10:00Z");
+
+  // 1. Owner already replied after question: Decision must be closed (not pending)
+  const answeredDecisionInput = [{
+    chat,
+    latest: { id: "m2", direction: "owner", kind: "text", text: "I will be free at 4pm", timestampMs: replyMs },
+    state: {
+      chat_id: "chat-1",
+      conversation_status: "awaiting_contact",
+      open_questions: [{ id: "q1", question: "When are you free?", asked_by_owner: false, status: "current", provenance: { source_message_id: "m1", occurred_at: "2026-08-26T10:00:00Z" } }],
+    },
+  }];
+  assert.equal(buildPendingItems(answeredDecisionInput, { nowMs }).length, 0);
+
+  // 2. Contact acknowledged answer ("Yeah" / "thanks"): Decision remains closed
+  const ackedDecisionInput = [{
+    chat,
+    latest: { id: "m3", direction: "contact", kind: "text", text: "Yeah", timestampMs: ackMs },
+    state: {
+      chat_id: "chat-1",
+      conversation_status: "awaiting_contact",
+      open_questions: [{ id: "q1", question: "Share your feedback here", asked_by_owner: false, status: "current", provenance: { source_message_id: "m1", occurred_at: "2026-08-26T10:00:00Z" } }],
+    },
+  }];
+  assert.equal(buildPendingItems(ackedDecisionInput, { nowMs }).length, 0);
+
+  // 3. Contact acknowledged task ("thanks"): Task auto-closes as done
+  const ackedTaskInput = [{
+    chat,
+    latest: { id: "m3", direction: "contact", kind: "text", text: "Thanks", timestampMs: ackMs },
+    state: {
+      chat_id: "chat-1",
+      commitments: [{ id: "c1", actor_is_owner: true, action: "I will share my feedback", status: "current", provenance: { source_message_id: "m1", occurred_at: "2026-08-26T10:00:00Z" } }],
+    },
+  }];
+  const taskResult = buildTaskItems(ackedTaskInput, undefined, { nowMs });
+  assert.equal(taskResult.length, 1);
+  assert.equal(taskResult[0].status, "done");
+
+  // 4. Owner acknowledged follow-up ("Got it"): Follow-up auto-closes as done
+  const ackedFollowUpInput = [{
+    chat,
+    latest: { id: "m3", direction: "owner", kind: "text", text: "Got it", timestampMs: ackMs },
+    state: {
+      chat_id: "chat-1",
+      commitments: [{ id: "c2", actor_is_owner: false, action: "I will send the file", status: "current", provenance: { source_message_id: "m1", occurred_at: "2026-08-26T10:00:00Z" } }],
+    },
+  }];
+  const followUpResult = buildFollowUpItems(ackedFollowUpInput, undefined, { nowMs });
+  assert.equal(followUpResult.length, 1);
+  assert.equal(followUpResult[0].status, "done");
+});

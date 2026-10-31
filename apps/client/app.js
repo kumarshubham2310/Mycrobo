@@ -44,7 +44,7 @@ if (webSession?.surface === "closed-pilot-web") {
     statusRequest: { sequence: 0, promise: null }, statusHealth: { consecutiveFailures: 0, lastSuccessAt: 0 },
     chatRenderSignature: "", workspaceSignature: "", overviewRenderedView: null,
     overviewViewport: { pending: null, tasks: null, followups: null },
-    dismissedExpanded: { tasks: false, followups: false }, snoozedExpanded: { tasks: false, followups: false }, staleExpanded: { tasks: false, followups: false }, drafts: new Map(), historyByChat: new Map(), pendingLatestId: null,
+    doneExpanded: { tasks: false, followups: false }, dismissedExpanded: { tasks: false, followups: false }, snoozedExpanded: { tasks: false, followups: false }, staleExpanded: { tasks: false, followups: false }, drafts: new Map(), historyByChat: new Map(), pendingLatestId: null,
     preferences: { draftLanguage: "match", replyLength: "match", liveUpdates: true, density: "comfortable", defaultSendingMode: "draft" },
     autonomy: null,
     integrations: null, tenants: null,
@@ -116,6 +116,8 @@ if (webSession?.surface === "closed-pilot-web") {
     if (!state.overviewViewport[view]) state.overviewViewport[view] = {};
     state.overviewViewport[view] = captureAnchor(overviewList, "[data-work-id]", "workId");
     if (["tasks", "followups"].includes(view)) {
+      const done = overviewList.querySelector("details.doneSection");
+      if (done) state.doneExpanded[view] = done.open;
       const dismissed = overviewList.querySelector("details.dismissedSection");
       if (dismissed) state.dismissedExpanded[view] = dismissed.open;
       const snoozed = overviewList.querySelector("details.snoozedSection");
@@ -1331,6 +1333,17 @@ if (webSession?.surface === "closed-pilot-web") {
       if (!receipt?.message_id) throw new Error("WhatsApp did not return a delivery acceptance receipt.");
       await recordDraftOutcome(chat.id, targetMessageId, draftLearningId, { event: "sent", shownDraft, finalDraft: body });
       state.drafts.delete(chat.id);
+      const chatDecisions = (state.pending || []).filter((item) => item.chat?.id === chat.id || item.id?.startsWith(chat.id + ":"));
+      for (const dec of chatDecisions) {
+        void updateDecision(dec.id, "dismissed", { offerUndo: false }).catch(() => null);
+      }
+      const chatTasks = (state.tasks || []).filter((item) => item.chat?.id === chat.id || item.id?.startsWith(chat.id + ":"));
+      for (const t of chatTasks) {
+        if (t.status === "pending") {
+          void updateTask(t.id, "done", "tasks", { offerUndo: false }).catch(() => null);
+        }
+      }
+      void loadWorkspace({ silent: true }).catch(() => null);
       replyPanel.className = "replyPanel sent";
       replyPanel.innerHTML = `<div><b>Accepted by WhatsApp</b><p>Message ID ${escapeHtml(receipt.message_id)}. MyCrobo will refresh the conversation.</p></div>`;
       setTimeout(() => { if (state.selected?.id === chat.id) void openChat(chat); }, 700);
@@ -2062,7 +2075,7 @@ if (webSession?.surface === "closed-pilot-web") {
     if (pendingView) return `
     <article class="workItem" data-work-id="${escapeHtml(item.id)}">
       <div><h2>${escapeHtml(shownTitle(item.chat))}</h2><p class="workMeta">${escapeHtml(stamp(item.timestampMs))}</p><p class="workPreview">${escapeHtml(item.preview)}</p><p class="workReason">${escapeHtml(item.reason)}${item.additionalCount ? ` · ${item.additionalCount} more open in this conversation` : ""}</p></div>
-      <div class="workActions"><button data-open-chat="${escapeHtml(item.chat.id)}" data-chat-collection="${escapeHtml(item.chat.collection || "active")}">Open chat</button><button class="secondary" data-decision-id="${escapeHtml(item.id)}" data-decision-status="dismissed">Not needed</button></div>
+      <div class="workActions"><button data-open-chat="${escapeHtml(item.chat.id)}" data-chat-collection="${escapeHtml(item.chat.collection || "active")}">Open chat</button><button class="secondary" data-decision-id="${escapeHtml(item.id)}" data-decision-status="dismissed" title="Mark this decision answered">Mark answered</button><button class="secondary" data-decision-id="${escapeHtml(item.id)}" data-decision-status="dismissed">Not needed</button></div>
     </article>`;
     const kind = followUpView ? "followups" : "tasks";
     const statusLabel = item.status === "snoozed" && item.snoozedUntil
@@ -2112,13 +2125,19 @@ if (webSession?.surface === "closed-pilot-web") {
       completeRender();
       return;
     }
-    const visibleItems = items.filter((item) => !["dismissed", "snoozed", "stale"].includes(item.status));
+    const visibleItems = items.filter((item) => item.status === "pending");
+    const doneItems = items.filter((item) => item.status === "done");
     const snoozedItems = items.filter((item) => item.status === "snoozed");
     const dismissedItems = items.filter((item) => item.status === "dismissed");
     const staleItems = items.filter((item) => item.status === "stale");
     const visibleMarkup = visibleItems.length
       ? visibleItems.map((item) => renderWorkItem(item, { pendingView, followUpView })).join("")
       : `<div class="overviewEmpty compact">${followUpView ? "No active follow-ups." : "No active tasks."}</div>`;
+    const doneMarkup = doneItems.length ? `
+    <details class="doneSection" data-done-kind="${followUpView ? "followups" : "tasks"}" ${state.doneExpanded[state.view] ? "open" : ""}>
+      <summary aria-label="Completed ${followUpView ? "follow-ups" : "tasks"}, ${doneItems.length} item${doneItems.length === 1 ? "" : "s"}. Show or hide"><span>Completed</span><span class="dismissedCount" aria-hidden="true">${doneItems.length}</span><span class="dismissedHint" aria-hidden="true">Show</span></summary>
+      <div class="dismissedList">${doneItems.map((item) => renderWorkItem(item, { pendingView, followUpView })).join("")}</div>
+    </details>` : "";
     const snoozedMarkup = snoozedItems.length ? `
     <details class="snoozedSection" data-snoozed-kind="${followUpView ? "followups" : "tasks"}" ${state.snoozedExpanded[state.view] ? "open" : ""}>
       <summary aria-label="Snoozed ${followUpView ? "follow-ups" : "tasks"}, ${snoozedItems.length} item${snoozedItems.length === 1 ? "" : "s"}. Show or hide"><span>Snoozed</span><span class="dismissedCount" aria-hidden="true">${snoozedItems.length}</span><span class="dismissedHint" aria-hidden="true">Show</span></summary>
@@ -2134,7 +2153,7 @@ if (webSession?.surface === "closed-pilot-web") {
       <summary aria-label="Older ${followUpView ? "follow-ups" : "tasks"} to review, ${staleItems.length} item${staleItems.length === 1 ? "" : "s"}. Show or hide"><span>Older items to review</span><span class="dismissedCount" aria-hidden="true">${staleItems.length}</span><span class="dismissedHint" aria-hidden="true">Show</span></summary>
       <div class="dismissedList">${staleItems.map((item) => renderWorkItem(item, { pendingView, followUpView })).join("")}</div>
     </details>` : "";
-    overviewList.innerHTML = `${visibleMarkup}${snoozedMarkup}${staleMarkup}${dismissedMarkup}`;
+    overviewList.innerHTML = `${visibleMarkup}${doneMarkup}${snoozedMarkup}${staleMarkup}${dismissedMarkup}`;
     completeRender();
   }
 
@@ -2408,6 +2427,9 @@ if (webSession?.surface === "closed-pilot-web") {
     if (decisionButton) void updateDecision(decisionButton.dataset.decisionId, decisionButton.dataset.decisionStatus);
   });
   overviewList.addEventListener("toggle", (event) => {
+    const done = event.target.closest?.("details.doneSection");
+    const doneKind = done?.dataset?.doneKind;
+    if (done && ["tasks", "followups"].includes(doneKind)) state.doneExpanded[doneKind] = done.open;
     const section = event.target.closest?.("details.dismissedSection");
     const kind = section?.dataset?.dismissedKind;
     if (section && ["tasks", "followups"].includes(kind)) state.dismissedExpanded[kind] = section.open;
