@@ -8,8 +8,8 @@ const COMPOSITE_PROMISE_CONTINUATION = /\b(?:and(?: then)?|then|after(?: that)?|
 const BROADCAST_SIGNAL = /\b(?:subscribe|follow (?:us|on)|channel|releasing|launching|register now|limited offer|warm regards|wishing you|forwarded many times|donation|official page|telegram|instagram|facebook|youtube channel)\b/iu;
 const URL_PATTERN = /https?:\/\/\S+/giu;
 const GENERIC_ACK_OR_CLOSURE = /^(?:ok(?:ay)?|got it|noted|thanks?|thank you|haan|han|hmm+|yep|yeah|sure|thik hai|theek hai|k|cool|alright|done|great|perfect|super|shukriya|dhanyawad)[.! ]*$/iu;
-const DECISION_FRESHNESS_MS = 45 * 86_400_000;
-const WORK_ITEM_FRESHNESS_MS = 45 * 86_400_000;
+const DECISION_FRESHNESS_MS = 3 * 86_400_000;
+const WORK_ITEM_FRESHNESS_MS = 3 * 86_400_000;
 
 function occurredAt(value) {
   const parsed = Date.parse(value || "");
@@ -179,10 +179,14 @@ export function buildTaskItems(workspaceItems = [], taskState = { tasks: {} }, {
       const expiresAt = Date.parse(commitment.expires_at || "");
       if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
       const latest = item?.latest;
+      const latestMs = Number(latest?.timestampMs || 0);
+      const conversationMovedPast = latestMs > observedMs;
       const contactAcknowledged = latest?.direction === "contact"
-        && Number(latest?.timestampMs) > observedMs
+        && conversationMovedPast
         && GENERIC_ACK_OR_CLOSURE.test(clean(latest.text));
-      const autoStatus = contactAcknowledged ? "done" : "pending";
+      const ownerFollowedUp = latest?.direction === "owner" && conversationMovedPast;
+      const awaitingContact = item?.state?.conversation_status === "awaiting_contact" && conversationMovedPast;
+      const autoStatus = (contactAcknowledged || ownerFollowedUp || awaitingContact) ? "done" : "pending";
       const id = `${chat.id}:${commitment.id}`;
       const saved = taskState.tasks?.[id] || {};
       tasks.push({
@@ -226,10 +230,14 @@ export function buildFollowUpItems(workspaceItems = [], taskState = { tasks: {} 
       const expiresAt = Date.parse(commitment.expires_at || "");
       if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
       const latest = item?.latest;
-      const ownerAcknowledged = latest?.direction === "owner"
-        && Number(latest?.timestampMs) > observedMs
+      const latestMs = Number(latest?.timestampMs || 0);
+      const conversationMovedPast = latestMs > observedMs;
+      const ownerAcknowledged = latest?.direction === "owner" && conversationMovedPast;
+      const awaitingContact = item?.state?.conversation_status === "awaiting_contact" && conversationMovedPast;
+      const contactClosed = latest?.direction === "contact"
+        && conversationMovedPast
         && GENERIC_ACK_OR_CLOSURE.test(clean(latest.text));
-      const autoStatus = ownerAcknowledged ? "done" : "pending";
+      const autoStatus = (ownerAcknowledged || awaitingContact || contactClosed) ? "done" : "pending";
       const id = `${chat.id}:followup:${commitment.id}`;
       const saved = taskState.tasks?.[id] || {};
       followUps.push({

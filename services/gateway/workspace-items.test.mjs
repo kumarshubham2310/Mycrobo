@@ -252,7 +252,7 @@ test("closing loops for which answer or acknowledgement is already given", () =>
   assert.equal(taskResult.length, 1);
   assert.equal(taskResult[0].status, "done");
 
-  // 4. Owner acknowledged follow-up ("Got it"): Follow-up auto-closes as done
+  // 4. Owner acknowledged/answered follow-up (regular reply or got it): Follow-up auto-closes as done
   const ackedFollowUpInput = [{
     chat,
     latest: { id: "m3", direction: "owner", kind: "text", text: "Got it", timestampMs: ackMs },
@@ -264,4 +264,16 @@ test("closing loops for which answer or acknowledgement is already given", () =>
   const followUpResult = buildFollowUpItems(ackedFollowUpInput, undefined, { nowMs });
   assert.equal(followUpResult.length, 1);
   assert.equal(followUpResult[0].status, "done");
+
+  // 5. Work item older than 3 days is marked stale
+  const staleDateMs = nowMs + 4 * 86_400_000;
+  const staleTaskInput = [{
+    chat,
+    state: {
+      chat_id: "chat-1",
+      commitments: [{ id: "c1", actor_is_owner: true, action: "I will check tomorrow", status: "current", provenance: { source_message_id: "m1", occurred_at: "2026-08-26T10:00:00Z" } }],
+    },
+  }];
+  const staleResult = buildTaskItems(staleTaskInput, undefined, { nowMs: staleDateMs });
+  assert.equal(staleResult[0].status, "stale");
 });
