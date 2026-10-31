@@ -158,7 +158,7 @@ func main() {
 			return
 		}
 		started := startConnection()
-		if !started && (!live.IsLinked() || live.ConnectionState(request.Context()) == "offline") {
+		if !started && (!live.IsLinked() || live.ConnectionState(request.Context()) != "current-read-only") {
 			go func() {
 				_, _ = live.RestartPairing(context.Background())
 			}()

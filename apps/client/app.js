@@ -190,7 +190,8 @@ if (webSession?.surface === "closed-pilot-web") {
 
   function startLiveEvents() {
     if (!state.preferences.liveUpdates || liveEvents || typeof EventSource !== "function") return;
-    liveEvents = new EventSource("/api/v1/events");
+    const token = localStorage.getItem("mycrobo.web.auth_token.v1");
+    liveEvents = new EventSource(token ? `/api/v1/events?token=${encodeURIComponent(token)}` : "/api/v1/events");
     liveEvents.addEventListener("message", (message) => {
       let event;
       try { event = JSON.parse(message.data); } catch { return; }
@@ -908,7 +909,13 @@ if (webSession?.surface === "closed-pilot-web") {
         const payload = await fetchJSON(endpoint, { cache: "no-store", signal: controller.signal });
         if (sequence !== state.chatRequest.sequence) return false;
         state.chats = presentChats(payload.chats);
-        if (state.chats.length) state.hasSavedChats = true;
+        if (state.chats.length) {
+          state.hasSavedChats = true;
+          if (state.view === "chats" && !setupPanel.classList.contains("hidden") && (state.lastStatus?.connected || state.lastStatus?.connectionState === "catching-up")) {
+            setupPanel.classList.add("hidden");
+            workspace.classList.remove("hidden");
+          }
+        }
         const refreshedSelection = state.selected && state.chats.find((chat) =>
           chat.id === state.selected.id
           || chat.connectorIds?.includes(state.selected.id)
@@ -1983,26 +1990,29 @@ if (webSession?.surface === "closed-pilot-web") {
     }
     if (status) status.textContent = "Removing this linked device securely…";
     try {
-      await fetchJSON("/api/v1/integrations/whatsapp/logout", {
-        method: "POST",
-        headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
-        signal: AbortSignal.timeout(5_000),
-      });
-    } catch { }
-    await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-    await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
-    state.forceSetup = true;
-    state.connectionSetupDismissed = false;
-    state.pairingMethod = "qr";
-    state.pairingShowEntry = false;
-    delete setupPanel.dataset.mode;
-    if (button) {
-      button.disabled = false;
-      button.textContent = "Log out";
+      try {
+        await fetchJSON("/api/v1/integrations/whatsapp/logout", {
+          method: "POST",
+          headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch { }
+      await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
+      await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
+      state.forceSetup = true;
+      state.connectionSetupDismissed = false;
+      state.pairingMethod = "qr";
+      state.pairingShowEntry = false;
+      delete setupPanel.dataset.mode;
+      showToast("WhatsApp logged out. Preparing QR code to reconnect…");
+      switchView("chats");
+      await refreshStatus();
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Log out WhatsApp";
+      }
     }
-    showToast("WhatsApp logged out. Preparing QR code to reconnect…");
-    switchView("chats");
-    await refreshStatus();
   }
 
   async function connectGoogle() {
@@ -3009,6 +3019,10 @@ if (webSession?.surface === "closed-pilot-web") {
             void loadWorkspace({ silent: true });
           }
         }
+        if ((status.connectionState === "catching-up" || hasSavedChats) && (!state.chats.length || !chatsStarted)) {
+          chatsStarted = true;
+          void loadChats({ silent: true, force: true });
+        }
         if (state.view === "connections") void loadConnections({ silent: true });
         return;
       }
@@ -3024,7 +3038,8 @@ if (webSession?.surface === "closed-pilot-web") {
         void loadChats();
         void loadWorkspace({ silent: true });
       } else {
-        void loadChats({ silent: true });
+        void loadChats({ silent: true, force: !state.chats.length });
+        if (!state.chats.length) void loadWorkspace({ silent: true });
       }
       return status;
     } catch {

@@ -324,12 +324,11 @@ func (l *Live) IsLinked() bool {
 func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	l.pairMu.Lock()
 	defer l.pairMu.Unlock()
-	if l.client.Store.ID != nil {
+	if l.client != nil && l.client.Store != nil && l.client.Store.ID != nil {
 		l.mu.RLock()
 		currentState := l.state
-		pairingState := l.pairing.State
 		l.mu.RUnlock()
-		if pairingState != "paired" && currentState != "current-read-only" && currentState != "catching-up" {
+		if currentState != "current-read-only" && currentState != "catching-up" {
 			l.pairMu.Unlock()
 			err := l.Logout(ctx)
 			l.pairMu.Lock()
@@ -392,20 +391,12 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 func (l *Live) RestartPairing(ctx context.Context) (PairingSnapshot, error) {
 	l.pairMu.Lock()
 	defer l.pairMu.Unlock()
-	if l.client.Store.ID != nil {
-		l.mu.RLock()
-		currentState := l.state
-		pairingState := l.pairing.State
-		l.mu.RUnlock()
-		if pairingState != "paired" && currentState != "current-read-only" && currentState != "catching-up" {
-			l.pairMu.Unlock()
-			err := l.Logout(ctx)
-			l.pairMu.Lock()
-			if err != nil {
-				return PairingSnapshot{}, err
-			}
-		} else {
-			return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
+	if l.client != nil && l.client.Store != nil && l.client.Store.ID != nil {
+		l.pairMu.Unlock()
+		err := l.Logout(ctx)
+		l.pairMu.Lock()
+		if err != nil {
+			return PairingSnapshot{}, err
 		}
 	}
 	if err := l.restartPairingSession(ctx); err != nil {

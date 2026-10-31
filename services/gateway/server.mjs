@@ -496,6 +496,11 @@ export function createGatewayServer(options = {}) {
   function extractBearerToken(req) {
     const auth = String(req?.headers?.authorization || "");
     if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+    try {
+      const url = new URL(req.url, "http://127.0.0.1");
+      const param = url.searchParams.get("token");
+      if (param) return param.trim();
+    } catch {}
     return "";
   }
 
