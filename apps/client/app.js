@@ -531,6 +531,7 @@ if (webSession?.surface === "closed-pilot-web") {
     state.openEpoch += 1;
     state.selected = null;
     state.selectedLatestId = null;
+    document.body.classList.remove("chat-open");
     conversationHeader.innerHTML = '<div><span class="sectionLabel">Conversation</span><h2 id="conversationTitle" tabindex="-1">Choose a chat</h2><p>The latest message will be verified before it is shown.</p></div>';
     contextPanel.classList.add("hidden");
     contextPanel.innerHTML = "";
@@ -941,6 +942,7 @@ if (webSession?.surface === "closed-pilot-web") {
     const epoch = ++state.openEpoch;
     state.selected = chat;
     state.selectedLatestId = null;
+    document.body.classList.add("chat-open");
     renderChats();
     conversationHeader.innerHTML = conversationTitle(chat, "Checking the exact latest message…");
     if (!preserveViewport) {
@@ -995,7 +997,7 @@ if (webSession?.surface === "closed-pilot-web") {
       const decision = history.reply || { shouldDraft: false, status: "waiting-for-latest", reason: "The exact latest message has not been verified yet." };
       const waiting = !current || decision.status === "waiting-for-latest";
       const targetMessageId = draftTargetId(history);
-      const exactSourceMessageId = history.latestSource?.id || targetMessageId;
+      const exactSourceMessageId = history.latestSource?.id || targetMessageId || renderedMessages.at(-1)?.id || "";
       replyPanel.className = `replyPanel ${waiting ? "waiting" : decision.shouldDraft ? "recommended" : "notNeeded"}`;
       const optionalIncoming = !decision.shouldDraft && history.latest?.direction === "contact" && history.latest?.id === exactSourceMessageId;
       const decisionLabel = waiting
@@ -1007,8 +1009,8 @@ if (webSession?.surface === "closed-pilot-web") {
             : decision.category === "cannot-decide-without-media"
               ? "View the attachment first"
               : "No reply needed";
-      const canWriteManually = Boolean(exactSourceMessageId);
-      const actions = !canWriteManually ? "" : `<div class="draftActions">${!waiting && decision.shouldDraft ? '<button id="draftButton">Draft reply</button>' : !waiting && optionalIncoming ? '<button id="draftAnyway">Draft anyway</button>' : ""}<button class="secondary" id="writeReply">${decision.shouldDraft || optionalIncoming || history.latestSource?.direction === "contact" ? "Write my own" : "Write another message"}</button></div>`;
+      const writeButtonLabel = decision.shouldDraft || optionalIncoming || history.latestSource?.direction === "contact" ? "Write my own" : "Write a message";
+      const actions = `<div class="draftActions">${!waiting && decision.shouldDraft ? '<button id="draftButton">Draft reply</button>' : !waiting && optionalIncoming ? '<button id="draftAnyway">Draft anyway</button>' : ""}<button class="secondary" id="writeReply">${writeButtonLabel}</button></div>`;
       replyPanel.innerHTML = `<div><b>${decisionLabel}</b><p>${escapeHtml(decision.reason)}</p></div>${actions}`;
       document.querySelector("#draftButton")?.addEventListener("click", () => void draftReply(chat, targetMessageId));
       document.querySelector("#draftAnyway")?.addEventListener("click", () => void draftReply(chat, targetMessageId, { draftAnyway: true }));

@@ -55,7 +55,10 @@ test("sending preferences expose all policies and independently report protected
   assert.match(app, /automaticSendAvailable === true/u);
   assert.match(app, /chatSendingScope/u);
   const consentStart = app.indexOf("async function updateAutonomyConsent");
-  const consentFunction = app.slice(consentStart, app.indexOf("\n}\n", consentStart) + 2);
+  const nextClosing = app.indexOf("\n  }\n", consentStart);
+  const fallbackClosing = app.indexOf("\n}\n", consentStart);
+  const consentEnd = nextClosing !== -1 ? nextClosing : fallbackClosing;
+  const consentFunction = app.slice(consentStart, consentEnd + 4);
   assert.doesNotMatch(consentFunction, /\/send(?:[/?"'`]|$)/u);
 });
 
