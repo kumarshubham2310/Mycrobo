@@ -158,6 +158,11 @@ func main() {
 			return
 		}
 		started := startConnection()
+		if !started && (!live.IsLinked() || live.ConnectionState(request.Context()) == "offline") {
+			go func() {
+				_, _ = live.RestartPairing(context.Background())
+			}()
+		}
 		response.Header().Set("Content-Type", "application/json")
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusAccepted)
@@ -165,7 +170,8 @@ func main() {
 	})
 	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
-		if live.IsLinked() {
+		connState := live.ConnectionState(request.Context())
+		if live.IsLinked() && (connState == "current-read-only" || connState == "catching-up" || snapshot.State == "paired") {
 			http.Error(response, "device is already linked", http.StatusConflict)
 			return
 		}

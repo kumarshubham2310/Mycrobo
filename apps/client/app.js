@@ -1986,6 +1986,7 @@ if (webSession?.surface === "closed-pilot-web") {
       await fetchJSON("/api/v1/integrations/whatsapp/logout", {
         method: "POST",
         headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
+        signal: AbortSignal.timeout(5_000),
       });
     } catch { }
     await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
@@ -1995,6 +1996,10 @@ if (webSession?.surface === "closed-pilot-web") {
     state.pairingMethod = "qr";
     state.pairingShowEntry = false;
     delete setupPanel.dataset.mode;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Log out";
+    }
     showToast("WhatsApp logged out. Preparing QR code to reconnect…");
     switchView("chats");
     await refreshStatus();

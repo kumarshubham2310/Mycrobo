@@ -327,17 +327,18 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	if l.client.Store.ID != nil {
 		l.mu.RLock()
 		currentState := l.state
+		pairingState := l.pairing.State
 		l.mu.RUnlock()
-		if currentState == "reauth-required" {
+		if pairingState != "paired" && currentState != "current-read-only" && currentState != "catching-up" {
 			l.pairMu.Unlock()
 			err := l.Logout(ctx)
 			l.pairMu.Lock()
 			if err != nil {
 				return PairingSnapshot{}, err
 			}
-			return l.Pairing(), nil
+		} else {
+			return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 		}
-		return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 	}
 	l.mu.RLock()
 	latest := l.latestQR
@@ -394,17 +395,18 @@ func (l *Live) RestartPairing(ctx context.Context) (PairingSnapshot, error) {
 	if l.client.Store.ID != nil {
 		l.mu.RLock()
 		currentState := l.state
+		pairingState := l.pairing.State
 		l.mu.RUnlock()
-		if currentState == "reauth-required" {
+		if pairingState != "paired" && currentState != "current-read-only" && currentState != "catching-up" {
 			l.pairMu.Unlock()
 			err := l.Logout(ctx)
 			l.pairMu.Lock()
 			if err != nil {
 				return PairingSnapshot{}, err
 			}
-			return l.Pairing(), nil
+		} else {
+			return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 		}
-		return PairingSnapshot{}, errors.New("this MyCrobo device is already linked")
 	}
 	if err := l.restartPairingSession(ctx); err != nil {
 		failure := pairingFailure(err)
@@ -424,13 +426,15 @@ func (l *Live) Logout(ctx context.Context) error {
 	runCtx := l.runCtx
 	l.mu.RUnlock()
 	if client != nil {
-		client.Disconnect()
 		if client.Store != nil {
-			if client.Store.ID != nil {
-				_ = client.Logout(ctx)
+			if client.Store.ID != nil && client.IsConnected() {
+				logoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_ = client.Logout(logoutCtx)
+				cancel()
 			}
 			_ = client.Store.Delete(ctx)
 		}
+		client.Disconnect()
 	}
 	if l.container != nil {
 		if devices, err := l.container.GetAllDevices(ctx); err == nil {
@@ -456,13 +460,15 @@ func (l *Live) Logout(ctx context.Context) error {
 	l.accountProof = ""
 	l.accountVerification = AccountVerificationSnapshot{State: "unverified"}
 	l.mu.Unlock()
-	if replacement != nil && runCtx != nil && runCtx.Err() == nil {
+	if replacement != nil {
+		connectContext := runCtx
+		if connectContext == nil || connectContext.Err() != nil {
+			connectContext = context.Background()
+		}
 		l.mu.Lock()
 		l.state = "connecting"
 		l.mu.Unlock()
-		if err := l.connectClient(runCtx, replacement); err != nil {
-			return fmt.Errorf("WhatsApp logged out, but a fresh linking session could not start: %w", err)
-		}
+		_ = l.connectClient(connectContext, replacement)
 	}
 	return nil
 }
