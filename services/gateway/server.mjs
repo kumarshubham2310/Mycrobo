@@ -496,12 +496,34 @@ export function createGatewayServer(options = {}) {
   function extractBearerToken(req) {
     const auth = String(req?.headers?.authorization || "");
     if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+    const cookie = String(req?.headers?.cookie || "");
+    const cookieMatch = cookie.match(/(?:^|;\s*)mycrobo_token=([^;]+)/);
+    if (cookieMatch) {
+      try { return decodeURIComponent(cookieMatch[1]).trim(); } catch {}
+    }
     try {
       const url = new URL(req.url, "http://127.0.0.1");
       const param = url.searchParams.get("token");
       if (param) return param.trim();
     } catch {}
     return "";
+  }
+
+  function unmaskAuthInput(input) {
+    if (input?.tokenPayload && typeof input.tokenPayload === "string") {
+      try {
+        let b64 = input.tokenPayload.replace(/-/g, "+").replace(/_/g, "/");
+        while (b64.length % 4) b64 += "=";
+        const binary = Buffer.from(b64, "base64");
+        const keyBytes = Buffer.from("mycrobo-secure-client-v1", "utf8");
+        const unmasked = Buffer.alloc(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          unmasked[i] = binary[i] ^ keyBytes[i % keyBytes.length];
+        }
+        return JSON.parse(unmasked.toString("utf8"));
+      } catch {}
+    }
+    return input || {};
   }
 
   const authEnforced = Boolean(controlPlane || (webAuth && webAuth.hasUsers()));
@@ -1286,13 +1308,15 @@ export function createGatewayServer(options = {}) {
         if (url.pathname === "/api/v1/auth/signup") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign up." });
           try {
-            const input = await readJSON(request, 16_384);
+            const rawInput = await readJSON(request, 16_384);
+            const input = unmaskAuthInput(rawInput);
             const created = webAuth.signup({
               email: input.email,
               displayName: input.displayName,
               password: input.password,
               workspaceName: input.workspaceName || input.tenantName,
             });
+            response.setHeader("Set-Cookie", `mycrobo_token=${encodeURIComponent(created.token)}; Path=/; HttpOnly; SameSite=Lax`);
             return json(response, 200, { authenticated: true, token: created.token, session: created.session });
           } catch (err) {
             return json(response, 400, { error: err instanceof Error ? err.message : "Registration failed." });
@@ -1301,8 +1325,10 @@ export function createGatewayServer(options = {}) {
         if (url.pathname === "/api/v1/auth/login") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign in." });
           try {
-            const input = await readJSON(request, 16_384);
+            const rawInput = await readJSON(request, 16_384);
+            const input = unmaskAuthInput(rawInput);
             const loggedIn = webAuth.login({ email: input.email, password: input.password });
+            response.setHeader("Set-Cookie", `mycrobo_token=${encodeURIComponent(loggedIn.token)}; Path=/; HttpOnly; SameSite=Lax`);
             return json(response, 200, { authenticated: true, token: loggedIn.token, session: loggedIn.session });
           } catch (err) {
             return json(response, 401, { error: err instanceof Error ? err.message : "Sign in failed." });
@@ -1310,6 +1336,7 @@ export function createGatewayServer(options = {}) {
         }
         if (url.pathname === "/api/v1/auth/logout") {
           if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign out." });
+          response.setHeader("Set-Cookie", "mycrobo_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax");
           return json(response, 200, { signedOut: true });
         }
         return json(response, 404, { error: "Unknown auth endpoint." });

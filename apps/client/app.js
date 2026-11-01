@@ -190,8 +190,7 @@ if (webSession?.surface === "closed-pilot-web") {
 
   function startLiveEvents() {
     if (!state.preferences.liveUpdates || liveEvents || typeof EventSource !== "function") return;
-    const token = localStorage.getItem("mycrobo.web.auth_token.v1");
-    liveEvents = new EventSource(token ? `/api/v1/events?token=${encodeURIComponent(token)}` : "/api/v1/events");
+    liveEvents = new EventSource("/api/v1/events");
     liveEvents.addEventListener("message", (message) => {
       let event;
       try { event = JSON.parse(message.data); } catch { return; }
@@ -1576,6 +1575,27 @@ if (webSession?.surface === "closed-pilot-web") {
     document.querySelector("#accountAvatar").textContent = (name.trim()[0] || "M").toLocaleUpperCase();
   }
 
+  function maskAuthPayload(data) {
+    try {
+      const raw = JSON.stringify(data);
+      const key = "mycrobo-secure-client-v1";
+      const utf8Bytes = new TextEncoder().encode(raw);
+      const keyBytes = new TextEncoder().encode(key);
+      const masked = new Uint8Array(utf8Bytes.length);
+      for (let i = 0; i < utf8Bytes.length; i++) {
+        masked[i] = utf8Bytes[i] ^ keyBytes[i % keyBytes.length];
+      }
+      let str = "";
+      for (let i = 0; i < masked.length; i++) {
+        str += String.fromCharCode(masked[i]);
+      }
+      const token = btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      return { tokenPayload: token };
+    } catch {
+      return data;
+    }
+  }
+
   function setupDesktopAuthBridge() {
     const USERS_KEY = "mycrobo.web.accounts.v1";
     const SESSION_KEY = "mycrobo.web.session.v1";
@@ -1618,7 +1638,7 @@ if (webSession?.surface === "closed-pilot-web") {
           const res = await fetch("/api/v1/auth/signup", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(input),
+            body: JSON.stringify(maskAuthPayload(input)),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not create account.");
@@ -1634,7 +1654,7 @@ if (webSession?.surface === "closed-pilot-web") {
           const res = await fetch("/api/v1/auth/login", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(input),
+            body: JSON.stringify(maskAuthPayload(input)),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Invalid email or password.");
