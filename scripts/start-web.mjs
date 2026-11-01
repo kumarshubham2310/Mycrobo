@@ -33,6 +33,27 @@ function freePort() {
   });
 }
 
+// Load environment variables from .env if present
+const envFile = resolve(root, ".env");
+if (existsSync(envFile)) {
+  try {
+    const lines = readFileSync(envFile, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match) {
+        const key = match[1];
+        let val = (match[2] || "").trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        if (!process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    }
+  } catch { }
+}
+
 const appDataRoot = process.env.APPDATA || (process.env.HOME ? resolve(process.env.HOME, ".config") : resolve(root, ".data"));
 
 function discoverDesktopTenant() {
@@ -395,6 +416,9 @@ const gatewayEnv = {
   ...(defaultBridgeUrl ? {
     MYCROBO_BRIDGE_URL: defaultBridgeUrl,
     MYCROBO_BRIDGE_TOKEN: defaultBridgeToken,
+  } : {}),
+  ...(process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY ? {
+    MYCROBO_MODEL_PROCESSING_CONSENT: "true",
   } : {}),
 };
 

@@ -215,9 +215,11 @@ if (webSession?.surface === "closed-pilot-web") {
             || state.selected.connectorIds?.some((id) => String(id).replace(/^(?:jid|lid|phone):/u, "") === String(eventChatId).replace(/^(?:jid|lid|phone):/u, ""))
           );
           if (matchesSelected) void refreshSelectedLatest();
-          if (eventChatId && getChatAutoReplyMode(eventChatId)) {
-            const targetChat = state.chats.find((c) => c.id === eventChatId || c.connectorIds?.includes(eventChatId)) || { id: eventChatId };
-            void triggerAutoReplyForNewMessage(targetChat);
+          if (eventChatId && !event?.data?.from_me && !event?.data?.FromMe) {
+            const targetChat = findChatById(eventChatId) || { id: eventChatId, title: event?.data?.sender_name || eventChatId };
+            if (getChatAutoReplyMode(targetChat)) {
+              void triggerAutoReplyForNewMessage(targetChat);
+            }
           }
         }, LIVE_EVENT_DEBOUNCE_MS);
         return;
@@ -624,22 +626,72 @@ if (webSession?.surface === "closed-pilot-web") {
     return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   }
 
+  function findChatById(chatId) {
+    if (!chatId) return null;
+    const cleanId = String(chatId).trim();
+    const strippedId = cleanId.replace(/^(?:jid|lid|phone):/u, "");
+    return state.chats.find((c) => {
+      if (c.id === cleanId || c.sourceId === cleanId) return true;
+      if (c.connectorIds?.includes(cleanId)) return true;
+      const cStripped = String(c.id).replace(/^(?:jid|lid|phone):/u, "");
+      const sStripped = String(c.sourceId || "").replace(/^(?:jid|lid|phone):/u, "");
+      if (cStripped === strippedId || sStripped === strippedId) return true;
+      if (c.connectorIds?.some((id) => String(id).replace(/^(?:jid|lid|phone):/u, "") === strippedId)) return true;
+      return false;
+    }) || null;
+  }
+
   function isAutoReplyEnabledGlobally() {
     return state.preferences.autoReplyEnabled === true || localStorage.getItem("mycrobo.globalAutoReply") === "on";
   }
 
-  function getChatAutoReplyMode(chatId) {
+  function getChatAutoReplyMode(chatOrId) {
     try {
-      const override = localStorage.getItem(`mycrobo.chatAutoReply.${chatId}`);
-      if (override === "on") return true;
-      if (override === "off") return false;
+      const candidates = [];
+      if (typeof chatOrId === "object" && chatOrId !== null) {
+        if (chatOrId.id) candidates.push(chatOrId.id);
+        if (chatOrId.sourceId) candidates.push(chatOrId.sourceId);
+        if (Array.isArray(chatOrId.connectorIds)) candidates.push(...chatOrId.connectorIds);
+      } else if (chatOrId) {
+        candidates.push(String(chatOrId));
+        const found = findChatById(chatOrId);
+        if (found) {
+          if (found.id) candidates.push(found.id);
+          if (found.sourceId) candidates.push(found.sourceId);
+          if (Array.isArray(found.connectorIds)) candidates.push(...found.connectorIds);
+        }
+      }
+
+      for (const id of candidates) {
+        if (!id) continue;
+        const val1 = localStorage.getItem(`mycrobo.chatAutoReply.${id}`);
+        if (val1 === "off") return false;
+        if (val1 === "on") return true;
+        const stripped = String(id).replace(/^(?:jid|lid|phone):/u, "");
+        const val2 = localStorage.getItem(`mycrobo.chatAutoReply.${stripped}`);
+        if (val2 === "off") return false;
+        if (val2 === "on") return true;
+      }
     } catch { }
     return isAutoReplyEnabledGlobally();
   }
 
-  function setChatAutoReplyMode(chatId, enabled) {
+  function setChatAutoReplyMode(chatOrId, enabled) {
     try {
-      localStorage.setItem(`mycrobo.chatAutoReply.${chatId}`, enabled ? "on" : "off");
+      const candidates = [];
+      if (typeof chatOrId === "object" && chatOrId !== null) {
+        if (chatOrId.id) candidates.push(chatOrId.id);
+        if (chatOrId.sourceId) candidates.push(chatOrId.sourceId);
+        if (Array.isArray(chatOrId.connectorIds)) candidates.push(...chatOrId.connectorIds);
+      } else if (chatOrId) {
+        candidates.push(String(chatOrId));
+      }
+      for (const id of candidates) {
+        if (!id) continue;
+        localStorage.setItem(`mycrobo.chatAutoReply.${id}`, enabled ? "on" : "off");
+        const stripped = String(id).replace(/^(?:jid|lid|phone):/u, "");
+        localStorage.setItem(`mycrobo.chatAutoReply.${stripped}`, enabled ? "on" : "off");
+      }
     } catch { }
   }
 
@@ -648,27 +700,24 @@ if (webSession?.surface === "closed-pilot-web") {
 
   async function triggerAutoReplyForNewMessage(chat) {
     if (!chat || !chat.id) return;
-    if (!getChatAutoReplyMode(chat.id)) return;
+    if (!getChatAutoReplyMode(chat)) return;
     if (autoReplyingChats.has(chat.id)) return;
 
     try {
       autoReplyingChats.add(chat.id);
-      const history = await fetchJSON(`/api/v1/chats/${encodeURIComponent(chat.id)}/messages?limit=10`, { cache: "no-store" });
-      const targetMessageId = draftTargetId(history);
-      const exactSourceMessageId = history.latestSource?.id || targetMessageId;
-      if (!exactSourceMessageId) return;
+      const latestPayload = await fetchJSON(`/api/v1/chats/${encodeURIComponent(chat.id)}/latest`, { cache: "no-store" });
+      const latestEvent = latestPayload?.latestSource || latestPayload?.latest;
+      if (!latestEvent || !latestEvent.id) return;
 
-      // Chat Analysis 1: verify the message is incoming from contact
-      const latestEvent = history.latestSource || history.latest;
-      if (latestEvent?.direction !== "contact") return;
+      // Only auto-reply to incoming turns from contact
+      if (latestEvent.direction !== "contact") return;
 
-      // Chat Analysis 2: deduplication check
+      const exactSourceMessageId = latestEvent.id;
       if (autoRepliedTargetMessageIds.has(exactSourceMessageId)) return;
 
-      // Chat Analysis 3: verify reply need (don't reply if no reply needed)
-      const decision = history.reply;
-      if (decision && decision.status === "waiting-for-latest") return;
-      if (decision && decision.shouldDraft === false) {
+      // Ignore pure acknowledgement closers (e.g. "ok", "thanks", "done", "theek hai")
+      const text = String(latestEvent.text || "").trim();
+      if (/^(?:ok(?:ay)?|haan+|haa+|ha+|hmm+|done|fine|thee?k|thik|acha|achha|got it|noted|thanks|thank you|thx|👍|👌|✅|🙂|😊)[.!…\s]*$/iu.test(text)) {
         autoRepliedTargetMessageIds.add(exactSourceMessageId);
         return;
       }
@@ -681,7 +730,7 @@ if (webSession?.surface === "closed-pilot-web") {
       const response = await fetch(`/api/v1/chats/${encodeURIComponent(chat.id)}/draft`, {
         method: "POST",
         headers: authHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({ targetMessageId: exactSourceMessageId }),
+        body: JSON.stringify({ targetMessageId: exactSourceMessageId, draftAnyway: true }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -692,15 +741,15 @@ if (webSession?.surface === "closed-pilot-web") {
         return;
       }
       const payload = await response.json();
-      const draftText = String(payload.draft || "").trim();
+      let draftText = String(payload.draft || "").trim();
       if (!draftText) return;
 
-      if (/\[(?:time|date|name|price|amount|location)\]/iu.test(draftText)) {
-        if (state.selected?.id === chat.id && replyPanel) {
-          replyPanel.className = "replyPanel waiting";
-          replyPanel.innerHTML = `<div><b>Auto-reply held for review</b><p>Reply contains placeholders that need your input.</p></div>`;
+      // If placeholder exists in draft, replace with clean acknowledgment
+      if (/\[(?:Add:|Select:|Say:|Confirm:|time|date|name|price|amount|location)/iu.test(draftText)) {
+        draftText = draftText.replace(/\[[^\]]+\]/gu, "").replace(/\s{2,}/gu, " ").trim();
+        if (!draftText || draftText.length < 3) {
+          draftText = "Noted, let me check and get back to you shortly.";
         }
-        return;
       }
 
       autoRepliedTargetMessageIds.add(exactSourceMessageId);
@@ -757,7 +806,7 @@ if (webSession?.surface === "closed-pilot-web") {
     if (!toggle) return;
     toggle.onchange = (event) => {
       const isNowOn = event.target.checked;
-      setChatAutoReplyMode(chat.id, isNowOn);
+      setChatAutoReplyMode(chat, isNowOn);
       const badge = document.querySelector("#chatAutoReplyBadge");
       if (badge) {
         badge.textContent = isNowOn ? "ON" : "OFF";
@@ -769,7 +818,7 @@ if (webSession?.surface === "closed-pilot-web") {
 
   function conversationTitle(chat, detail) {
     const title = shownTitle(chat);
-    const isAutoReplyOn = getChatAutoReplyMode(chat.id);
+    const isAutoReplyOn = getChatAutoReplyMode(chat);
     return `<button class="mobileBack" id="backToChats" type="button" aria-label="Back to chats">←</button><div class="conversationHeadingWrap"><span class="sectionLabel">Conversation</span><h2 id="conversationTitle" tabindex="-1" title="${escapeHtml(title)}">${escapeHtml(title)}</h2><p>${escapeHtml(detail)}</p></div><div class="conversationAutoReplyControl"><label class="chatAutoReplyToggleLabel" title="Turn auto-reply on or off for this conversation"><span class="chatAutoReplyLabelText">Auto-reply</span><input type="checkbox" id="chatAutoReplySwitch" class="chatAutoReplySwitch" ${isAutoReplyOn ? "checked" : ""} aria-label="Toggle auto-reply for this conversation" /><span class="chatAutoReplyBadge ${isAutoReplyOn ? "on" : "off"}" id="chatAutoReplyBadge">${isAutoReplyOn ? "ON" : "OFF"}</span></label></div>`;
   }
 
