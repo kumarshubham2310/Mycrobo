@@ -397,6 +397,7 @@ for (const [tid, entry] of bridgeChildren) {
     url: entry.url,
     token: entry.token,
     tenantDataDir: entry.tenantDataDir,
+    pid: entry.child?.pid || null,
   };
 }
 

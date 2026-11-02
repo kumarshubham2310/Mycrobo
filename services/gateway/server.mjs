@@ -75,6 +75,7 @@ class TenantBridgeRegistry {
           url: info.url,
           token: info.token,
           child: null, // managed by parent process
+          pid: info.pid || null,
           dataDir: info.tenantDataDir,
         });
       }
@@ -205,9 +206,43 @@ class TenantBridgeRegistry {
 
     const url = `http://127.0.0.1:${bridgePort}`;
     const bs = this._createBridgeSource(url, bridgeToken);
-    this._bridges.set(tenantId, { bridgeSource: bs, url, token: bridgeToken, child, dataDir: tDir });
+    this._bridges.set(tenantId, { bridgeSource: bs, url, token: bridgeToken, child, pid: child?.pid || null, dataDir: tDir });
     console.log(`[TenantBridgeRegistry] Bridge for ${tenantId} ready on port ${bridgePort}`);
     return bs;
+  }
+
+  async killAndReset(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    if (entry) {
+      if (entry.child && !entry.child.killed) {
+        try { entry.child.kill("SIGKILL"); } catch { }
+      } else if (entry.pid) {
+        try { process.kill(entry.pid, "SIGKILL"); } catch { }
+      }
+      this._bridges.delete(tenantId);
+    }
+    // Delete session database files so whatsmeow starts completely fresh
+    const appDataRoot = this._config.appDataRoot;
+    const tDir = entry?.dataDir
+      || (appDataRoot ? resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tenantId}`) : null);
+    if (tDir && existsSync(tDir)) {
+      for (const file of ["linked-device.db", "linked-device.db-shm", "linked-device.db-wal"]) {
+        const p = resolve(tDir, file);
+        if (existsSync(p)) {
+          try { unlinkSync(p); } catch { }
+        }
+      }
+    }
+    // Spawn fresh bridge
+    const freshBridge = await this.getOrSpawn(tenantId);
+    if (freshBridge?.startImport) {
+      try {
+        await freshBridge.startImport();
+      } catch (err) {
+        console.warn(`[TenantBridgeRegistry] startImport warning after reset for ${tenantId}:`, err.message);
+      }
+    }
+    return freshBridge;
   }
 
   shutdownAll() {
@@ -1444,14 +1479,26 @@ export function createGatewayServer(options = {}) {
         const caller = callerSession(request);
         if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
+        const targetTenant = caller.tenantId || tenantId;
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
-        if (!bridge?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
-        try {
-          const result = await bridge.logout();
-          return json(response, 200, result);
-        } catch (error) {
-          return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not be logged out." });
+        if (bridge?.logout) {
+          try {
+            await bridge.logout();
+          } catch (err) {
+            console.warn(`[Gateway] bridge.logout() notice for ${targetTenant}:`, err.message);
+          }
         }
+        if (tenantBridgeRegistry) {
+          await tenantBridgeRegistry.killAndReset(targetTenant);
+        } else if (userDataDir) {
+          for (const f of ["linked-device.db", "linked-device.db-shm", "linked-device.db-wal"]) {
+            const p = resolve(userDataDir, f);
+            if (existsSync(p)) {
+              try { unlinkSync(p); } catch { }
+            }
+          }
+        }
+        return json(response, 200, { logged_out: true, local_history_preserved: true });
       }
       if (url.pathname === "/api/v1/integrations/google/start") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect Google." });

@@ -194,7 +194,7 @@ if (webSession?.surface === "closed-pilot-web") {
     if (token) {
       try {
         document.cookie = `mycrobo_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
-      } catch {}
+      } catch { }
     }
     const eventsUrl = token ? `/api/v1/events?token=${encodeURIComponent(token)}` : "/api/v1/events";
     liveEvents = new EventSource(eventsUrl);
@@ -1723,9 +1723,8 @@ if (webSession?.surface === "closed-pilot-web") {
               headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
             });
           } catch { }
-          await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-          await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
           delete setupPanel?.dataset?.mode;
+          delete setupPanel?.dataset?.qr;
           await refreshStatus();
           return { restarting: true };
         },
@@ -2086,16 +2085,17 @@ if (webSession?.surface === "closed-pilot-web") {
         await fetchJSON("/api/v1/integrations/whatsapp/logout", {
           method: "POST",
           headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
-          signal: AbortSignal.timeout(5_000),
+          signal: AbortSignal.timeout(15_000),
         });
-      } catch { }
-      await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-      await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
+      } catch (err) {
+        console.warn("Logout error:", err);
+      }
       state.forceSetup = true;
       state.connectionSetupDismissed = false;
       state.pairingMethod = "qr";
       state.pairingShowEntry = false;
       delete setupPanel.dataset.mode;
+      delete setupPanel.dataset.qr;
       showToast("WhatsApp logged out. Preparing QR code to reconnect…");
       switchView("chats");
       await refreshStatus();
@@ -2746,9 +2746,8 @@ if (webSession?.surface === "closed-pilot-web") {
             headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
           });
         } catch { }
-        await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-        await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
         delete setupPanel.dataset.mode;
+        delete setupPanel.dataset.qr;
         await refreshStatus();
       } catch (error) {
         errorNode.textContent = error instanceof Error ? error.message : "WhatsApp reconnection could not be prepared.";
@@ -2786,9 +2785,8 @@ if (webSession?.surface === "closed-pilot-web") {
             headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
           });
         } catch { }
-        await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-        await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
         delete setupPanel.dataset.mode;
+        delete setupPanel.dataset.qr;
         await refreshStatus();
       } catch (error) {
         errorNode.textContent = error instanceof Error ? error.message : "WhatsApp reconnection could not be prepared.";
@@ -3007,9 +3005,8 @@ if (webSession?.surface === "closed-pilot-web") {
               headers: { "x-mycrobo-confirm": "LOG OUT WHATSAPP" },
             });
           } catch { }
-          await fetchJSON("/api/v1/pairing-restart", { method: "POST" }).catch(() => { });
-          await fetchJSON("/api/v1/connect", { method: "POST" }).catch(() => { });
           delete setupPanel.dataset.mode;
+          delete setupPanel.dataset.qr;
           await refreshStatus();
         })();
       }
