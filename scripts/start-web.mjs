@@ -291,28 +291,65 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
     MYCROBO_AUTO_REBIND_ACCOUNT: "true",
   };
 
+  if (!isWin && existsSync(bridgeExe)) {
+    try { chmodSync(bridgeExe, 0o755); } catch { }
+  }
+
   console.log(`[BridgeManager] Spawning bridge for tenant ${tid} on 127.0.0.1:${bridgePort}...`);
 
-  let child;
-  try {
-    child = spawn(bridgeExe, bridgeArgs, {
-      cwd: root,
-      env: bridgeEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (err) {
-    console.warn(`[BridgeManager] Direct bridge spawn failed for ${tid}: ${err.message}`);
+  const label = tid.slice(0, 12);
+  let child = null;
+  let spawnFailed = false;
+
+  if (existsSync(bridgeExe)) {
     try {
+      child = spawn(bridgeExe, bridgeArgs, {
+        cwd: root,
+        env: bridgeEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child.on("error", (err) => {
+        console.warn(`[Bridge:${label}] Executable error: ${err.message}`);
+        spawnFailed = true;
+      });
+    } catch (err) {
+      console.warn(`[Bridge:${label}] spawn failed: ${err.message}`);
+      spawnFailed = true;
+    }
+  } else {
+    spawnFailed = true;
+  }
+
+  // Check if binary exited immediately
+  if (child) {
+    await new Promise((r) => setTimeout(r, 600));
+    if (child.exitCode !== null || spawnFailed) {
+      console.warn(`[Bridge:${label}] Binary stopped (exit ${child.exitCode}); falling back to go run ./cmd/livebridge...`);
+      try { child.kill(); } catch { }
+      child = null;
+      spawnFailed = true;
+    }
+  }
+
+  // Fallback to go run
+  if (!child || spawnFailed) {
+    try {
+      console.log(`[Bridge:${label}] Spawning via 'go run ./cmd/livebridge'...`);
       child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
         cwd: resolve(root, "services", "whatsapp-bridge"),
         env: bridgeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      child.on("error", (err) => {
+        console.error(`[Bridge:${label}] Go run process error: ${err.message}`);
+      });
     } catch (e) {
-      console.warn(`[BridgeManager] Go run fallback also failed for ${tid}: ${e.message}`);
+      console.warn(`[Bridge:${label}] Go run fallback failed: ${e.message}`);
       return null;
     }
   }
+
+  if (!child) return null;
 
   child.stdout?.on("data", (chunk) => {
     const msg = chunk.toString().trim();
@@ -387,7 +424,7 @@ const bridgeManagerConfig = {
   appDataRoot,
   rootDir: root,
   defaultTenantId: tenantId,
-  hasBridgeExe: existsSync(bridgeExe),
+  hasBridgeExe: existsSync(bridgeExe) || existsSync(resolve(root, "services", "whatsapp-bridge", "cmd", "livebridge", "main.go")),
   // Active bridges at startup — gateway will manage additional ones dynamically
   activeBridges: {},
 };

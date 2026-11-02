@@ -98,7 +98,6 @@ class TenantBridgeRegistry {
 
   async getOrSpawn(tenantId) {
     if (this._bridges.has(tenantId)) return this._bridges.get(tenantId).bridgeSource;
-    if (!this._config.hasBridgeExe) return null;
 
     // Deduplicate concurrent spawn requests
     if (this._spawning.has(tenantId)) return this._spawning.get(tenantId);
@@ -113,10 +112,13 @@ class TenantBridgeRegistry {
   }
 
   async _spawnBridge(tenantId) {
-    const appDataRoot = this._config.appDataRoot;
-    const rootDir = this._config.rootDir;
+    const appDataRoot = this._config.appDataRoot || (userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"));
+    const rootDir = this._config.rootDir || resolve(clientRoot, "..", "..");
     const bridgeExe = this._config.bridgeExePath;
-    if (!bridgeExe || !existsSync(bridgeExe)) return null;
+
+    if (bridgeExe && process.platform !== "win32" && existsSync(bridgeExe)) {
+      try { chmodSync(bridgeExe, 0o755); } catch { }
+    }
 
     const tDir = resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tenantId}`);
     mkdirSync(tDir, { recursive: true });
@@ -157,22 +159,60 @@ class TenantBridgeRegistry {
       MYCROBO_AUTO_REBIND_ACCOUNT: "true",
     };
 
-    let child;
-    try {
-      child = spawn(bridgeExe, bridgeArgs, {
-        cwd: rootDir,
-        env: bridgeEnv,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (err) {
+    const label = tenantId.slice(0, 12);
+    let child = null;
+    let spawnFailed = false;
+
+    // 1. Try executable binary if present
+    if (bridgeExe && existsSync(bridgeExe)) {
       try {
+        child = spawn(bridgeExe, bridgeArgs, {
+          cwd: rootDir,
+          env: bridgeEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        child.on("error", (err) => {
+          console.warn(`[Bridge:${label}] Executable error: ${err.message}`);
+          spawnFailed = true;
+        });
+      } catch (err) {
+        console.warn(`[Bridge:${label}] Direct spawn failed: ${err.message}`);
+        spawnFailed = true;
+      }
+    } else {
+      spawnFailed = true;
+    }
+
+    // Check if binary exited immediately
+    if (child) {
+      await new Promise((r) => setTimeout(r, 600));
+      if (child.exitCode !== null || spawnFailed) {
+        console.warn(`[Bridge:${label}] Binary stopped (exit ${child.exitCode}); falling back to go run ./cmd/livebridge...`);
+        try { child.kill(); } catch { }
+        child = null;
+        spawnFailed = true;
+      }
+    }
+
+    // 2. Fallback to go run
+    if (!child || spawnFailed) {
+      try {
+        console.log(`[Bridge:${label}] Spawning live bridge via 'go run ./cmd/livebridge'...`);
         child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
           cwd: resolve(rootDir, "services", "whatsapp-bridge"),
           env: bridgeEnv,
           stdio: ["ignore", "pipe", "pipe"],
         });
-      } catch { return null; }
+        child.on("error", (err) => {
+          console.error(`[Bridge:${label}] Go run error: ${err.message}`);
+        });
+      } catch (e) {
+        console.warn(`[Bridge:${label}] Go run fallback failed: ${e.message}`);
+        return null;
+      }
     }
+
+    if (!child) return null;
 
     const label = tenantId.slice(0, 12);
     child.stdout?.on("data", (chunk) => {
@@ -681,11 +721,16 @@ export function createGatewayServer(options = {}) {
     if (!targetTenant) return bridgeSource;
     if (tenantBridgeRegistry) {
       if (spawnIfNeeded) {
-        return await tenantBridgeRegistry.getOrSpawn(targetTenant);
+        const spawned = await tenantBridgeRegistry.getOrSpawn(targetTenant);
+        if (spawned) return spawned;
       }
       const existing = tenantBridgeRegistry.get(targetTenant);
       if (existing) return existing;
       if (targetTenant === tenantId && bridgeSource) return bridgeSource;
+      if (bridgeSource) {
+        console.warn(`[Gateway] Per-tenant bridge not ready for ${targetTenant}; using default bridgeSource`);
+        return bridgeSource;
+      }
       return null;
     }
     return bridgeSource;
