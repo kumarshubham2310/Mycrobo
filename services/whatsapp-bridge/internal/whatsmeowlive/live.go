@@ -559,7 +559,11 @@ func (l *Live) connectClientLocked(ctx context.Context, client *whatsmeow.Client
 		l.latestQR = PairingSnapshot{}
 		l.state = "connecting"
 		l.mu.Unlock()
-		go l.consumePairing(ctx, qr, sequence)
+		consumerCtx := l.runCtx
+		if consumerCtx == nil || consumerCtx.Err() != nil {
+			consumerCtx = context.Background()
+		}
+		go l.consumePairing(consumerCtx, qr, sequence)
 	}
 	if err := client.Connect(); err != nil {
 		l.setState("error")
@@ -621,7 +625,11 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	go l.consumePairing(ctx, qr, sequence)
+	consumerCtx := l.runCtx
+	if consumerCtx == nil || consumerCtx.Err() != nil {
+		consumerCtx = context.Background()
+	}
+	go l.consumePairing(consumerCtx, qr, sequence)
 	if err = client.Connect(); err != nil {
 		return err
 	}

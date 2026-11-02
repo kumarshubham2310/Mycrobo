@@ -171,7 +171,7 @@ func main() {
 	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
 		connState := live.ConnectionState(request.Context())
-		if live.IsLinked() && (connState == "current-read-only" || connState == "catching-up" || snapshot.State == "paired") {
+		if live.IsLinked() && (connState == "current-read-only" || connState == "catching-up") {
 			http.Error(response, "device is already linked", http.StatusConflict)
 			return
 		}

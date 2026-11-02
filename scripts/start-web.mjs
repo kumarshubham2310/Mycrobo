@@ -243,10 +243,25 @@ if (!existsSync(bridgeExe)) {
   }
 }
 
+function resolveGoBinary() {
+  const candidates = [
+    "go",
+    "/usr/local/go/bin/go",
+    "/usr/bin/go",
+    "/snap/bin/go",
+    process.env.GOROOT ? resolve(process.env.GOROOT, "bin", "go") : null,
+    process.env.HOME ? resolve(process.env.HOME, "go", "bin", "go") : null,
+  ].filter(Boolean);
+  for (const cand of candidates) {
+    if (cand === "go") continue;
+    if (existsSync(cand)) return cand;
+  }
+  return "go";
+}
+
 // Spawn a bridge for the default tenant (backward compatible)
 async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
   if (bridgeChildren.has(tid)) return bridgeChildren.get(tid);
-  if (!existsSync(bridgeExe)) return null;
 
   const tDir = tData || resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tid}`);
   mkdirSync(tDir, { recursive: true });
@@ -284,8 +299,13 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
     "-parent-pid", String(process.pid),
   ];
 
+  const extraPaths = ["/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin", "/snap/bin"];
+  const currentPath = process.env.PATH || "";
+  const mergedPath = [...new Set([...extraPaths, ...currentPath.split(process.platform === "win32" ? ";" : ":")])].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+
   const bridgeEnv = {
     ...process.env,
+    PATH: mergedPath,
     MYCROBO_BRIDGE_TOKEN: bridgeToken,
     MYCROBO_MESSAGE_DB_KEY: tenantDbKeyHex,
     MYCROBO_AUTO_REBIND_ACCOUNT: "true",
@@ -334,8 +354,9 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
   // Fallback to go run
   if (!child || spawnFailed) {
     try {
-      console.log(`[Bridge:${label}] Spawning via 'go run ./cmd/livebridge'...`);
-      child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+      const goBin = resolveGoBinary();
+      console.log(`[Bridge:${label}] Spawning via '${goBin} run ./cmd/livebridge'...`);
+      child = spawn(goBin, ["run", "./cmd/livebridge", ...bridgeArgs], {
         cwd: resolve(root, "services", "whatsapp-bridge"),
         env: bridgeEnv,
         stdio: ["ignore", "pipe", "pipe"],
@@ -367,7 +388,7 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
   });
 
   // Wait for health check
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 45_000;
   let ready = false;
   while (Date.now() < deadline) {
     try {
@@ -406,7 +427,8 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
 let defaultBridgeUrl = null;
 let defaultBridgeToken = null;
 
-if (existsSync(bridgeExe)) {
+const hasBridgeSource = existsSync(bridgeExe) || existsSync(resolve(root, "services", "whatsapp-bridge", "cmd", "livebridge", "main.go"));
+if (hasBridgeSource) {
   const defaultEntry = await spawnBridgeForTenant(tenantId, tenantData, messageDbKeyHex);
   if (defaultEntry) {
     defaultBridgeUrl = defaultEntry.url;

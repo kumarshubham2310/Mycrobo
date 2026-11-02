@@ -59,6 +59,22 @@ function freePort() {
   });
 }
 
+function resolveGoBinary() {
+  const candidates = [
+    "go",
+    "/usr/local/go/bin/go",
+    "/usr/bin/go",
+    "/snap/bin/go",
+    process.env.GOROOT ? resolve(process.env.GOROOT, "bin", "go") : null,
+    process.env.HOME ? resolve(process.env.HOME, "go", "bin", "go") : null,
+  ].filter(Boolean);
+  for (const cand of candidates) {
+    if (cand === "go") continue;
+    if (existsSync(cand)) return cand;
+  }
+  return "go";
+}
+
 class TenantBridgeRegistry {
   constructor(managerConfig, createBridgeSourceFn) {
     this._config = managerConfig || {};
@@ -112,7 +128,7 @@ class TenantBridgeRegistry {
   }
 
   async _spawnBridge(tenantId) {
-    const appDataRoot = this._config.appDataRoot || (userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"));
+    const appDataRoot = this._config.appDataRoot || (process.env.MYCROBO_USER_DATA_DIR ? dirname(process.env.MYCROBO_USER_DATA_DIR) : resolve(clientRoot, "..", "..", ".data"));
     const rootDir = this._config.rootDir || resolve(clientRoot, "..", "..");
     const bridgeExe = this._config.bridgeExePath;
 
@@ -152,8 +168,13 @@ class TenantBridgeRegistry {
       "-parent-pid", String(process.pid),
     ];
 
+    const extraPaths = ["/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin", "/snap/bin"];
+    const currentPath = process.env.PATH || "";
+    const mergedPath = [...new Set([...extraPaths, ...currentPath.split(process.platform === "win32" ? ";" : ":")])].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+
     const bridgeEnv = {
       ...process.env,
+      PATH: mergedPath,
       MYCROBO_BRIDGE_TOKEN: bridgeToken,
       MYCROBO_MESSAGE_DB_KEY: dbKeyHex,
       MYCROBO_AUTO_REBIND_ACCOUNT: "true",
@@ -197,8 +218,9 @@ class TenantBridgeRegistry {
     // 2. Fallback to go run
     if (!child || spawnFailed) {
       try {
-        console.log(`[Bridge:${label}] Spawning live bridge via 'go run ./cmd/livebridge'...`);
-        child = spawn("go", ["run", "./cmd/livebridge", ...bridgeArgs], {
+        const goBin = resolveGoBinary();
+        console.log(`[Bridge:${label}] Spawning live bridge via '${goBin} run ./cmd/livebridge'...`);
+        child = spawn(goBin, ["run", "./cmd/livebridge", ...bridgeArgs], {
           cwd: resolve(rootDir, "services", "whatsapp-bridge"),
           env: bridgeEnv,
           stdio: ["ignore", "pipe", "pipe"],
@@ -214,7 +236,6 @@ class TenantBridgeRegistry {
 
     if (!child) return null;
 
-    const label = tenantId.slice(0, 12);
     child.stdout?.on("data", (chunk) => {
       const msg = chunk.toString().trim();
       if (msg) console.log(`[Bridge:${label}] ${msg}`);
@@ -226,7 +247,7 @@ class TenantBridgeRegistry {
     child.on("exit", () => { this._bridges.delete(tenantId); });
 
     // Wait for health
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 45_000;
     let ready = false;
     while (Date.now() < deadline) {
       try {
@@ -558,11 +579,21 @@ export function createGatewayServer(options = {}) {
     const raw = process.env.MYCROBO_BRIDGE_MANAGER;
     if (raw) bridgeManagerConfig = JSON.parse(raw);
   } catch { }
-  const tenantBridgeRegistry = bridgeManagerConfig
-    ? new TenantBridgeRegistry(bridgeManagerConfig, (url, token) => {
-        return createBridgeSource(url, token);
-      })
-    : null;
+  if (!bridgeManagerConfig) {
+    bridgeManagerConfig = {
+      bridgeExePath: process.platform === "win32"
+        ? resolve(clientRoot, "..", "..", "bin", "mycrobo-live-bridge.exe")
+        : resolve(clientRoot, "..", "..", "bin", "mycrobo-live-bridge"),
+      appDataRoot: userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"),
+      rootDir: resolve(clientRoot, "..", ".."),
+      defaultTenantId: tenantId,
+      hasBridgeExe: true,
+      activeBridges: {},
+    };
+  }
+  const tenantBridgeRegistry = new TenantBridgeRegistry(bridgeManagerConfig, (url, token) => {
+    return createBridgeSource(url, token);
+  });
 
   // ─── Web Auth Manager (Zero-dependency JWT & multi-user store) ───────────
   const authDataDir = options.authDataDir || (userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"));
@@ -1471,12 +1502,12 @@ export function createGatewayServer(options = {}) {
         return json(response, 200, {
           ...build,
           apiVersion: "1.0",
-          connector: "whatsmeow-live",
+          connector: "personal-pilot",
           connected: false,
           connectionState: "offline",
           readOnly: false,
           sendAvailable: false,
-          pairing: { state: "unpaired" },
+          pairing: { state: "unpaired", qrImage: "/api/v1/pairing-qr" },
           automaticDelivery: autoSendRuntime.status(),
         });
       }

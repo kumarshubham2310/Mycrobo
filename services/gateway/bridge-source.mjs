@@ -474,7 +474,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
         sendAvailable: health.send_available === true,
         pairing: {
           state: link.state,
-          qrImage: link.state === "scan-required" ? "/api/v1/pairing-qr" : null,
+          qrImage: (link.state === "scan-required" || link.state === "preparing" || link.state === "unpaired") ? "/api/v1/pairing-qr" : null,
           phoneCode: link.state === "phone-code" ? link.phone_code || null : null,
           phoneMasked: link.state === "phone-code" ? link.phone_masked || null : null,
           expiresAt: link.expires_at || null,

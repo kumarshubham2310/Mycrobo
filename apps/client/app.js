@@ -2560,12 +2560,12 @@ if (webSession?.surface === "closed-pilot-web") {
       button.textContent = "Starting…";
     }
     state.forceSetup = true;
+    renderQRPairing({ connectionState: "connecting" }, { state: "scan-required", qrImage: "/api/v1/pairing-qr" });
     try {
       await fetchJSON("/api/v1/connect", { method: "POST", signal: AbortSignal.timeout(20_000) });
-      renderSetup({ connectionState: "connecting", pairing: { state: "preparing" } });
       await refreshStatus({ skipSavedChatProbe: true });
     } catch (error) {
-      const errorNode = document.querySelector("#setupError");
+      const errorNode = document.querySelector("#qrLoadStatus") || document.querySelector("#setupError");
       if (errorNode) errorNode.textContent = error?.name === "TimeoutError"
         ? "Connection took too long. Please try again."
         : error instanceof Error ? error.message : "Connection could not start.";
@@ -3018,10 +3018,11 @@ if (webSession?.surface === "closed-pilot-web") {
       if (state.pairingShowEntry) renderPhoneEntry(status); else renderPhoneCode(status, pairing);
       return;
     }
-    if (pairing.state === "scan-required" && pairing.qrImage) {
-      const mode = state.pairingMethod === "phone" ? "phone-entry" : `scan-required:${pairing.qrImage}`;
+    const qrImage = pairing.qrImage || (state.pairingMethod === "qr" && (pairing.state === "scan-required" || pairing.state === "preparing" || pairing.state === "unpaired" || status.connectionState === "connecting") ? "/api/v1/pairing-qr" : null);
+    if ((pairing.state === "scan-required" || (state.forceSetup && (pairing.state === "preparing" || pairing.state === "unpaired" || status.connectionState === "connecting"))) && qrImage) {
+      const mode = state.pairingMethod === "phone" ? "phone-entry" : `scan-required:${qrImage}`;
       if (setupPanel.dataset.mode === mode) return;
-      if (state.pairingMethod === "phone") renderPhoneEntry(status); else renderQRPairing(status, pairing);
+      if (state.pairingMethod === "phone") renderPhoneEntry(status); else renderQRPairing(status, { ...pairing, qrImage });
       return;
     }
     if (["expired", "retryable-error", "blocked-error", "timeout"].includes(pairing.state)) {
