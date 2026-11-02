@@ -2931,12 +2931,12 @@ if (webSession?.surface === "closed-pilot-web") {
         qrImg.src = objectUrl;
       } catch (error) {
         if (sequence !== state.qrLoadSequence) return;
-        if (loadStatus) loadStatus.textContent = error instanceof Error ? error.message : "QR image could not be loaded.";
+        if (loadStatus) loadStatus.textContent = "Loading secure QR code…";
         setTimeout(() => {
           if (sequence === state.qrLoadSequence && state.pairingMethod === "qr" && state.view === "chats" && document.querySelector(".pairingQR")) {
             void loadQRImage();
           }
-        }, 2500);
+        }, 1500);
       }
     };
     void loadQRImage();

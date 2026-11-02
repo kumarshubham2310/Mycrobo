@@ -341,48 +341,58 @@ func (l *Live) UseQR(ctx context.Context) (PairingSnapshot, error) {
 	}
 	l.mu.RLock()
 	latest := l.latestQR
-	connected := l.client != nil && l.client.IsConnected()
 	deadline := l.pairingDeadline
 	pairingState := l.pairing.State
 	sequence := l.pairingSequence
+	currentState := l.state
 	l.mu.RUnlock()
 
-	// If the connector is already live and just waiting for WhatsApp to emit
-	// the first QR code ("preparing" or "connecting" state), wait for it
-	// instead of killing the open WebSocket with a premature restart.
-	if connected && (pairingState == "preparing" || pairingState == "connecting") &&
-		(!deadline.IsZero() && time.Until(deadline) > pairingMinimumLifetime) {
-		// Ignore wait error — always re-read state afterwards. If the wait
-		// failed because the browser closed its HTTP connection (ctx cancelled),
-		// we must NOT restart the pairing session.
-		_ = l.waitForPairingReady(ctx, sequence)
+	// If we already have a live, unexpired QR code, return it immediately!
+	if (latest.State == "scan-required" || pairingState == "scan-required") &&
+		(latest.Code != "" || l.pairing.Code != "") &&
+		(!deadline.IsZero() && time.Now().UTC().Before(deadline)) {
+		if latest.Code != "" {
+			l.pairing = latest
+		}
+		return l.pairing, nil
+	}
+
+	// If the connector is currently preparing or connecting, wait for WhatsApp to deliver the code!
+	// Never disconnect an active handshake.
+	if (pairingState == "preparing" || currentState == "connecting" || currentState == "opening") &&
+		(!deadline.IsZero() && time.Now().UTC().Before(deadline)) {
+		waitErr := l.waitForPairingReady(ctx, sequence)
 		l.mu.RLock()
 		latest = l.latestQR
-		connected = l.client != nil && l.client.IsConnected()
-		deadline = l.pairingDeadline
 		l.mu.RUnlock()
+		if waitErr == nil && latest.State == "scan-required" && latest.Code != "" {
+			l.pairing = latest
+			return l.pairing, nil
+		}
 	}
 
 	// If the calling context is already done (e.g. browser disconnected),
-	// do not attempt a session restart — that would kill the open WebSocket.
+	// do not attempt a session restart.
 	if ctx.Err() != nil {
 		return PairingSnapshot{}, ctx.Err()
 	}
 
-	if !connected || latest.State != "scan-required" || latest.Code == "" || (!deadline.IsZero() && time.Now().UTC().After(deadline)) {
-		if err := l.restartPairingSession(ctx); err != nil {
-			failure := pairingFailure(err)
-			l.setPairingSnapshot(failure)
-			return failure, errors.New(failure.Error)
-		}
+	if err := l.restartPairingSession(ctx); err != nil {
+		failure := pairingFailure(err)
+		l.setPairingSnapshot(failure)
+		return failure, errors.New(failure.Error)
 	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.latestQR.State != "scan-required" || l.latestQR.Code == "" {
-		return PairingSnapshot{}, errors.New("a fresh WhatsApp QR code is not ready yet")
+	if l.latestQR.State == "scan-required" && l.latestQR.Code != "" {
+		l.pairing = l.latestQR
+		return l.pairing, nil
 	}
-	l.pairing = l.latestQR
-	return l.pairing, nil
+	if l.pairing.State == "scan-required" && l.pairing.Code != "" {
+		return l.pairing, nil
+	}
+	return PairingSnapshot{}, errors.New("a fresh WhatsApp QR code is not ready yet")
 }
 
 // RestartPairing discards an expired unpaired login socket and waits for a
@@ -653,7 +663,7 @@ func (l *Live) waitForPairingReady(ctx context.Context, sequence uint64) error {
 		// Accept QR from either pairing or latestQR (both are updated by consumePairing)
 		qrReady := (snapshot.State == "scan-required" && snapshot.Code != "") ||
 			(latestQR.State == "scan-required" && latestQR.Code != "")
-		if qrReady && l.client.IsConnected() {
+		if qrReady {
 			return nil
 		}
 		if snapshot.State == "blocked-error" || snapshot.State == "retryable-error" || snapshot.State == "expired" {
