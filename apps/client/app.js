@@ -1642,12 +1642,20 @@ if (webSession?.surface === "closed-pilot-web") {
           return { authenticated: false, bootstrapRequired: false, user: null, tenant: null };
         },
         async bootstrapOwner(input) {
-          const res = await fetch("/api/v1/auth/signup", {
+          let res = await fetch("/api/v1/auth/signup", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(maskAuthPayload(input)),
           });
-          const data = await res.json();
+          let data = await res.json().catch(() => ({}));
+          if (!res.ok && data.error === "Enter a valid email address." && input?.email) {
+            res = await fetch("/api/v1/auth/signup", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(input),
+            });
+            data = await res.json().catch(() => ({}));
+          }
           if (!res.ok) throw new Error(data.error || "Could not create account.");
           if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
           if (data.session?.user) {
@@ -1658,12 +1666,20 @@ if (webSession?.surface === "closed-pilot-web") {
           return { authenticated: true, session: data.session };
         },
         async signIn(input) {
-          const res = await fetch("/api/v1/auth/login", {
+          let res = await fetch("/api/v1/auth/login", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(maskAuthPayload(input)),
           });
-          const data = await res.json();
+          let data = await res.json().catch(() => ({}));
+          if (!res.ok && (data.error === "Invalid email or password." || data.error === "Sign in failed.") && input?.email) {
+            res = await fetch("/api/v1/auth/login", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(input),
+            });
+            data = await res.json().catch(() => ({}));
+          }
           if (!res.ok) throw new Error(data.error || "Invalid email or password.");
           if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
           if (data.session?.user) {

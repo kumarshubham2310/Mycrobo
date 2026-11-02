@@ -520,7 +520,8 @@ export function createGatewayServer(options = {}) {
         for (let i = 0; i < binary.length; i++) {
           unmasked[i] = binary[i] ^ keyBytes[i % keyBytes.length];
         }
-        return JSON.parse(unmasked.toString("utf8"));
+        const parsed = JSON.parse(unmasked.toString("utf8"));
+        return { ...input, ...parsed };
       } catch {}
     }
     return input || {};
