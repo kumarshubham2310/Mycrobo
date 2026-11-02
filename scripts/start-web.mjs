@@ -322,6 +322,17 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
   let child = null;
   let spawnFailed = false;
 
+  const attachOutput = (c, name) => {
+    c.stdout?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge:${label}:${name}] ${msg}`);
+    });
+    c.stderr?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.warn(`[Bridge:${label}:${name}:err] ${msg}`);
+    });
+  };
+
   if (existsSync(bridgeExe)) {
     try {
       child = spawn(bridgeExe, bridgeArgs, {
@@ -329,6 +340,7 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
         env: bridgeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      attachOutput(child, "bin");
       child.on("error", (err) => {
         console.warn(`[Bridge:${label}] Executable error: ${err.message}`);
         spawnFailed = true;

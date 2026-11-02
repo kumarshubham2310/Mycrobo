@@ -2560,12 +2560,12 @@ if (webSession?.surface === "closed-pilot-web") {
       button.textContent = "Starting…";
     }
     state.forceSetup = true;
-    renderQRPairing({ connectionState: "connecting" }, { state: "scan-required", qrImage: "/api/v1/pairing-qr" });
     try {
-      await fetchJSON("/api/v1/connect", { method: "POST", signal: AbortSignal.timeout(20_000) });
+      await fetchJSON("/api/v1/connect", { method: "POST", signal: AbortSignal.timeout(25_000) });
+      renderQRPairing({ connectionState: "connecting" }, { state: "scan-required", qrImage: "/api/v1/pairing-qr" });
       await refreshStatus({ skipSavedChatProbe: true });
     } catch (error) {
-      const errorNode = document.querySelector("#qrLoadStatus") || document.querySelector("#setupError");
+      const errorNode = document.querySelector("#setupError");
       if (errorNode) errorNode.textContent = error?.name === "TimeoutError"
         ? "Connection took too long. Please try again."
         : error instanceof Error ? error.message : "Connection could not start.";
@@ -2882,7 +2882,7 @@ if (webSession?.surface === "closed-pilot-web") {
     state.pairingMethod = "qr";
     setupPanel.dataset.mode = `scan-required:${pairing.qrImage}`;
     setupPanel.dataset.qr = pairing.qrImage;
-    setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("qr")}<span class="step">Connect by camera</span><h1>Scan with WhatsApp</h1><p>On your phone, open WhatsApp → Linked devices → Link a device.</p><p id="qrLoadStatus" role="status">Loading secure QR code…</p><img class="pairingQR" alt="WhatsApp linked-device QR code" /><ol class="pairingSteps compactSteps"><li><span>1</span><p>Open WhatsApp on your phone.</p></li><li><span>2</span><p>Open <strong>Linked devices</strong>.</p></li><li><span>3</span><p>Tap <strong>Link a device</strong> and scan this code.</p></li></ol><button type="button" class="setupSecondary" id="refreshQR"><span aria-hidden="true">↻</span> Reload QR code</button><small>No chat message is sent by linking or importing.</small></div>`;
+    setupPanel.innerHTML = `<div class="setupCard pairingCard">${pairingTabs("qr")}<span class="step">Connect by camera</span><h1>Scan with WhatsApp</h1><p>On your phone, open WhatsApp → Linked devices → Link a device.</p><p id="qrLoadStatus" role="status">Loading secure QR code…</p><img class="pairingQR" style="display:none" alt="WhatsApp linked-device QR code" /><ol class="pairingSteps compactSteps"><li><span>1</span><p>Open WhatsApp on your phone.</p></li><li><span>2</span><p>Open <strong>Linked devices</strong>.</p></li><li><span>3</span><p>Tap <strong>Link a device</strong> and scan this code.</p></li></ol><button type="button" class="setupSecondary" id="refreshQR"><span aria-hidden="true">↻</span> Reload QR code</button><small>No chat message is sent by linking or importing.</small></div>`;
     bindPairingTabs(status);
 
     const loadQRImage = async () => {
@@ -2913,6 +2913,7 @@ if (webSession?.surface === "closed-pilot-web") {
         qrImg.onload = () => {
           if (sequence !== state.qrLoadSequence) return;
           if (previousUrl) URL.revokeObjectURL(previousUrl);
+          qrImg.style.display = "block";
           if (loadStatus) loadStatus.textContent = "";
           qrImg.onload = null;
           qrImg.onerror = null;
@@ -2920,6 +2921,7 @@ if (webSession?.surface === "closed-pilot-web") {
         qrImg.onerror = () => {
           URL.revokeObjectURL(objectUrl);
           if (state.qrObjectUrl === objectUrl) state.qrObjectUrl = null;
+          qrImg.style.display = "none";
           qrImg.onload = null;
           qrImg.onerror = null;
           if (sequence !== state.qrLoadSequence) return;
