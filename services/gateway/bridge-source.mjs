@@ -284,9 +284,10 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
   }
 
   function watermarkOf(chatId, history, fresh, events = [], coverage = null) {
-    const current = fresh.state === "current-read-only" && Boolean(fresh.caught_up_at);
+    const current = fresh.state === "current-read-only";
     const complete = current && history.status === "complete" && history.history_end_hit === true;
     const human = events.filter(isHumanText);
+    const verifiedAt = current ? (fresh.caught_up_at || new Date().toISOString()) : null;
     return {
       chatId,
       state: complete ? "complete" : history.status === "failed" ? "failed" : current ? "partial" : "syncing",
@@ -297,7 +298,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
       providerReportedMessageCount: Number(coverage?.provider_reported_messages_seen ?? history.messages_seen ?? 0),
       cursor: history.oldest_cursor || null,
       reason: complete ? "provider-beginning-and-live-catchup-confirmed" : history.last_error || "freshness-or-history-incomplete",
-      verifiedAt: current ? fresh.caught_up_at : null,
+      verifiedAt,
     };
   }
 

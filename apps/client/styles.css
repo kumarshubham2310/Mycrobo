@@ -241,7 +241,7 @@ h1, h2, p { margin:0; }
 .conversation:has(.replyPanel.hidden) .newMessageNotice { bottom:20px; }
 
 /* Draft and send */
-.replyPanel { flex:0 0 auto; width:100%; box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 22px; border-top:1px solid var(--line); background:#fff; box-shadow:0 -10px 32px rgba(18,54,41,.055); z-index:4; }
+.replyPanel { flex:0 0 auto; width:100%; box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 22px; border-top:1px solid var(--line); background:#fff; box-shadow:0 -10px 32px rgba(18,54,41,.055); z-index:10; position:relative; }
 .replyPanel.hidden { display:none !important; }
 .replyPanel>div:first-child { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
 .replyPanel>div:first-child b { display:block; font-size:13px; }
@@ -253,7 +253,7 @@ h1, h2, p { margin:0; }
 .replyPanel.notNeeded { background:#fffcf2; }
 .replyPanel.waiting { background:#f4f7f5; }
 .replyPanel.error { border-top-color:#e9c3bd; background:#fff7f5; }
-.replyPanel.draftReady { display:grid; grid-template-columns:minmax(0,1fr); align-items:stretch; gap:12px; }
+.replyPanel.draftReady { display:grid; grid-template-columns:minmax(0,1fr); align-items:stretch; gap:12px; max-height:min(68vh, 520px); overflow-y:auto; }
 .draftEditor { flex:1; min-width:0; }
 .draftEditor label { display:block; margin-bottom:7px; overflow-wrap:anywhere; color:#315346; font-size:11px; font-weight:850; line-height:1.35; }
 .draftEditor textarea { width:100%; min-height:70px; resize:none; padding:12px; border:1px solid #bfd5c9; border-radius:12px; color:var(--ink); background:#fbfdfc; }
@@ -336,9 +336,9 @@ h1, h2, p { margin:0; }
 .settingsForm { display:grid; gap:14px; margin-top:28px; }
 .settingsForm fieldset { display:grid; gap:2px; margin:0; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:17px; background:#fff; box-shadow:0 7px 24px rgba(14,56,40,.035); }
 .settingsForm legend { width:100%; padding:17px 18px 11px; color:var(--deep); font-size:13px; font-weight:900; }
-.settingsForm label { min-height:76px; display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,240px); align-items:center; gap:20px; padding:13px 18px; border-top:1px solid var(--soft); }
-.settingsForm label>span,.settingsForm label>span>b { display:block; font-size:14px; }
-.settingsForm label small { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.4; }
+.settingsForm label, .settingsForm .settingRow { min-height:76px; display:grid; grid-template-columns:minmax(0,1fr) minmax(180px,240px); align-items:center; gap:20px; padding:13px 18px; border-top:1px solid var(--soft); }
+.settingsForm label>span,.settingsForm label>span>b, .settingsForm .settingRow>span, .settingsForm .settingRow>span>b { display:block; font-size:14px; }
+.settingsForm label small, .settingsForm .settingRow small { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.4; }
 .settingsForm select { min-height:42px; padding:0 38px 0 12px; border:1px solid #c8d9d0; border-radius:11px; color:var(--ink); background:#f8fbf9; }
 .settingsForm .toggleLabel { grid-template-columns:minmax(0,1fr) auto; }
 .toggleLabel input { width:44px; height:24px; accent-color:var(--green); }
@@ -531,7 +531,7 @@ body.compact .message { padding:8px 11px; }
   .workActions { flex-wrap:wrap; }
   .settingsPanel { padding:8px; }
   .settingsScroller { padding:22px 12px; border-radius:12px; }
-  .settingsForm label { grid-template-columns:1fr; gap:9px; }
+  .settingsForm label, .settingsForm .settingRow { grid-template-columns:1fr; gap:9px; }
   .autonomyFacts { grid-template-columns:1fr; }
   .autonomyReadiness { grid-template-columns:1fr; }
   .connectionsPanel { padding:8px; }

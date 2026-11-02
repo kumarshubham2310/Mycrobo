@@ -79,10 +79,12 @@ function presentationState(saved = {}, nowMs = Date.now(), observedAt = "", auto
     const wake = Date.parse(saved.snoozedUntil || "");
     return Number.isFinite(wake) && wake > nowMs ? "snoozed" : "pending";
   }
-  if (["pending", "done", "dismissed"].includes(saved.status)) return saved.status;
+  if (["done", "dismissed"].includes(saved.status)) return saved.status;
   if (autoStatus === "done") return "done";
+  if (saved.status === "pending") return "pending";
   const observed = Date.parse(observedAt || "");
-  return Number.isFinite(observed) && nowMs - observed > WORK_ITEM_FRESHNESS_MS ? "stale" : "pending";
+  if (!Number.isFinite(observed)) return "stale";
+  return nowMs - observed > WORK_ITEM_FRESHNESS_MS ? "stale" : "pending";
 }
 
 export function buildPendingItems(workspaceItems = [], { nowMs = Date.now() } = {}) {
@@ -174,12 +176,16 @@ export function buildTaskItems(workspaceItems = [], taskState = { tasks: {} }, {
       // here until matching completion evidence is observed or the user closes
       // the loop manually.
       if (!action || isPureNonDeliverablePromise(action)) continue;
-      const observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
-      const observedMs = occurredAt(observedAt);
-      const expiresAt = Date.parse(commitment.expires_at || "");
-      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
+      let observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
+      let observedMs = occurredAt(observedAt);
       const latest = item?.latest;
       const latestMs = Number(latest?.timestampMs || 0);
+      if (!observedMs && latestMs > 0) {
+        observedMs = latestMs;
+        observedAt = new Date(latestMs).toISOString();
+      }
+      const expiresAt = Date.parse(commitment.expires_at || "");
+      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
       const conversationMovedPast = latestMs > observedMs;
       const contactAcknowledged = latest?.direction === "contact"
         && conversationMovedPast
@@ -225,12 +231,16 @@ export function buildFollowUpItems(workspaceItems = [], taskState = { tasks: {} 
       // ambiguous and was the source of incorrect reminders.
       const waitingOnOtherPerson = commitment.actor_is_owner === false && Boolean(action);
       if (!waitingOnOtherPerson) continue;
-      const observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
-      const observedMs = occurredAt(observedAt);
-      const expiresAt = Date.parse(commitment.expires_at || "");
-      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
+      let observedAt = commitment.provenance?.occurred_at || state.updated_at || "";
+      let observedMs = occurredAt(observedAt);
       const latest = item?.latest;
       const latestMs = Number(latest?.timestampMs || 0);
+      if (!observedMs && latestMs > 0) {
+        observedMs = latestMs;
+        observedAt = new Date(latestMs).toISOString();
+      }
+      const expiresAt = Date.parse(commitment.expires_at || "");
+      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) continue;
       const conversationMovedPast = latestMs > observedMs;
       const ownerAcknowledged = latest?.direction === "owner" && conversationMovedPast;
       const awaitingContact = item?.state?.conversation_status === "awaiting_contact" && conversationMovedPast;

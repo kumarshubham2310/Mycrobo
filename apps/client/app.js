@@ -190,7 +190,14 @@ if (webSession?.surface === "closed-pilot-web") {
 
   function startLiveEvents() {
     if (!state.preferences.liveUpdates || liveEvents || typeof EventSource !== "function") return;
-    liveEvents = new EventSource("/api/v1/events");
+    const token = localStorage.getItem("mycrobo.web.auth_token.v1");
+    if (token) {
+      try {
+        document.cookie = `mycrobo_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
+      } catch {}
+    }
+    const eventsUrl = token ? `/api/v1/events?token=${encodeURIComponent(token)}` : "/api/v1/events";
+    liveEvents = new EventSource(eventsUrl);
     liveEvents.addEventListener("message", (message) => {
       let event;
       try { event = JSON.parse(message.data); } catch { return; }
@@ -1067,10 +1074,10 @@ if (webSession?.surface === "closed-pilot-web") {
               ? "View the attachment first"
               : "No reply needed";
       const writeButtonLabel = decision.shouldDraft || optionalIncoming || history.latestSource?.direction === "contact" ? "Write my own" : "Write a message";
-      const actions = `<div class="draftActions">${!waiting && decision.shouldDraft ? '<button id="draftButton">Draft reply</button>' : !waiting && optionalIncoming ? '<button id="draftAnyway">Draft anyway</button>' : ""}<button class="secondary" id="writeReply">${writeButtonLabel}</button></div>`;
+      const draftButtonLabel = decision.shouldDraft ? "Draft reply" : "Suggest AI reply";
+      const actions = `<div class="draftActions"><button id="draftButton">${draftButtonLabel}</button><button class="secondary" id="writeReply">${writeButtonLabel}</button></div>`;
       replyPanel.innerHTML = `<div><b>${decisionLabel}</b><p>${escapeHtml(decision.reason)}</p></div>${actions}`;
-      document.querySelector("#draftButton")?.addEventListener("click", () => void draftReply(chat, targetMessageId));
-      document.querySelector("#draftAnyway")?.addEventListener("click", () => void draftReply(chat, targetMessageId, { draftAnyway: true }));
+      document.querySelector("#draftButton")?.addEventListener("click", () => void draftReply(chat, targetMessageId || exactSourceMessageId, { draftAnyway: !decision.shouldDraft }));
       document.querySelector("#writeReply")?.addEventListener("click", () => showComposer(chat, exactSourceMessageId, "", decision.shouldDraft || optionalIncoming || history.latestSource?.direction === "contact" ? "Your reply" : "Your follow-up"));
       if (savedDraft) {
         const targetChanged = savedDraft.targetMessageId !== exactSourceMessageId;
@@ -2487,6 +2494,11 @@ if (webSession?.surface === "closed-pilot-web") {
   document.querySelector("#removeContacts")?.addEventListener("click", () => void removeContext("contacts"));
   document.querySelector("#removeCalendar")?.addEventListener("click", () => void removeContext("calendar"));
   settingsForm.addEventListener("submit", (event) => void savePreferences(event));
+  settingsForm.addEventListener("change", (event) => {
+    if (event.target.matches("select, input")) {
+      void savePreferences(event);
+    }
+  });
   document.querySelector("#grantAutoSendConsent")?.addEventListener("click", () => void updateAutonomyConsent("grant"));
   document.querySelector("#revokeAutoSendConsent")?.addEventListener("click", () => void updateAutonomyConsent("revoke"));
   document.querySelector("#emergencyStopAutoSend")?.addEventListener("click", () => void updateAutonomyConsent("emergency-stop"));
