@@ -162,6 +162,7 @@ class TenantBridgeRegistry {
 
     const bridgeArgs = [
       "-listen", `127.0.0.1:${bridgePort}`,
+      "-api-token", bridgeToken,
       "-messages-database", resolve(tDir, "messages.db"),
       "-session-database", resolve(tDir, "linked-device.db"),
       "-enable-text-send",
@@ -749,22 +750,30 @@ export function createGatewayServer(options = {}) {
   async function getBridgeForRequest(req, { spawnIfNeeded = false } = {}) {
     const caller = callerSession(req);
     const targetTenant = caller.tenantId || tenantId;
-    if (!targetTenant) return bridgeSource;
-    if (tenantBridgeRegistry) {
+    if (tenantBridgeRegistry && targetTenant) {
       if (spawnIfNeeded) {
-        const spawned = await tenantBridgeRegistry.getOrSpawn(targetTenant);
-        if (spawned) return spawned;
+        try {
+          const spawned = await tenantBridgeRegistry.getOrSpawn(targetTenant);
+          if (spawned) return spawned;
+        } catch (err) {
+          console.warn(`[Gateway] Failed to spawn bridge for ${targetTenant}: ${err.message}`);
+        }
       }
       const existing = tenantBridgeRegistry.get(targetTenant);
       if (existing) return existing;
-      if (targetTenant === tenantId && bridgeSource) return bridgeSource;
-      if (bridgeSource) {
-        console.warn(`[Gateway] Per-tenant bridge not ready for ${targetTenant}; using default bridgeSource`);
-        return bridgeSource;
-      }
-      return null;
     }
-    return bridgeSource;
+    if (bridgeSource) return bridgeSource;
+    if (tenantBridgeRegistry && tenantId) {
+      if (spawnIfNeeded) {
+        try {
+          const defaultSpawned = await tenantBridgeRegistry.getOrSpawn(tenantId);
+          if (defaultSpawned) return defaultSpawned;
+        } catch { }
+      }
+      const defaultExisting = tenantBridgeRegistry.get(tenantId);
+      if (defaultExisting) return defaultExisting;
+    }
+    return null;
   }
 
   const callerStateStores = new Map();

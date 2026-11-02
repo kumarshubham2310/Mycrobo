@@ -293,6 +293,7 @@ async function spawnBridgeForTenant(tid, tData, dbKeyHex) {
 
   const bridgeArgs = [
     "-listen", `127.0.0.1:${bridgePort}`,
+    "-api-token", bridgeToken,
     "-messages-database", resolve(tDir, "messages.db"),
     "-session-database", resolve(tDir, "linked-device.db"),
     "-enable-text-send",

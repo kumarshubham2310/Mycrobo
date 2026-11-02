@@ -1,6 +1,6 @@
 module mycrobo/whatsapp-bridge
 
-go 1.26.0
+go 1.22.0
 
 require (
 	github.com/ncruces/go-sqlite3 v0.35.3
