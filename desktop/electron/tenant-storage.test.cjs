@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { legacyArtifacts, materializeLegacyTenant, tenantDirectory } = require("./tenant-storage.cjs");
+const { legacyArtifacts, materializeLegacyTenant, tenantDirectory, tenantUserDirectory } = require("./tenant-storage.cjs");
 
 test("legacy tenant materialization copies only an allowlist into a disjoint directory", () => {
   const root = mkdtempSync(join(tmpdir(), "mycrobo-tenant-storage-"));
@@ -47,4 +47,41 @@ test("tenant paths reject traversal and conflicting migration copies", () => {
   const destination = tenantDirectory(root, "tenant-0000000000000001");
   writeFileSync(join(destination, "messages.db"), "two");
   assert.throws(() => materializeLegacyTenant(root, "tenant-0000000000000001"), /conflicts/u);
+});
+
+test("tenant history remains with its pinned owner while each other user gets an empty private vault", () => {
+  const root = mkdtempSync(join(tmpdir(), "mycrobo-tenant-user-storage-"));
+  const tenantId = "tenant-0000000000000001";
+  const ownerUserId = "user-000000000000000000000001";
+  const otherUserId = "user-000000000000000000000002";
+  const shared = tenantDirectory(root, tenantId);
+  writeFileSync(join(shared, "messages.db"), "owner history");
+  writeFileSync(join(shared, "linked-device.db"), "owner session");
+
+  const ownerDirectory = tenantUserDirectory(root, tenantId, ownerUserId, ownerUserId);
+  const otherDirectory = tenantUserDirectory(root, tenantId, otherUserId, ownerUserId);
+  assert.equal(ownerDirectory, shared);
+  assert.notEqual(otherDirectory, shared);
+  assert.equal(readFileSync(join(ownerDirectory, "messages.db"), "utf8"), "owner history");
+  assert.equal(existsSync(join(otherDirectory, "messages.db")), false);
+  assert.equal(existsSync(join(otherDirectory, "linked-device.db")), false);
+  assert.match(otherDirectory, /users[\\/]user-000000000000000000000002$/u);
+});
+
+test("tenant data ownership cannot be reassigned by a later user or invalid identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "mycrobo-tenant-user-storage-"));
+  const tenantId = "tenant-0000000000000001";
+  const firstUserId = "user-000000000000000000000001";
+  const laterUserId = "user-000000000000000000000002";
+  const firstDirectory = tenantUserDirectory(root, tenantId, firstUserId, firstUserId);
+  const laterDirectory = tenantUserDirectory(root, tenantId, laterUserId, firstUserId);
+  assert.notEqual(firstDirectory, laterDirectory);
+  assert.throws(
+    () => tenantUserDirectory(root, tenantId, laterUserId, laterUserId),
+    /owner record is invalid/u,
+  );
+  assert.throws(
+    () => tenantUserDirectory(root, tenantId, "user-invalid", firstUserId),
+    /user identifier is invalid/u,
+  );
 });

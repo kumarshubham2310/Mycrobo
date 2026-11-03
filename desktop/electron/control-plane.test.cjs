@@ -20,6 +20,7 @@ test("control plane starts empty and bootstraps only from supplied administrator
   assert.equal(created.session.user.platformAdmin, true);
   assert.equal(created.session.tenant.name, "Consulting");
   assert.match(plane.tenantStorageRelativePath(created.token), /^tenants\/tenant-/u);
+  assert.equal(plane.tenantStorageOwnerUserId(created.session.tenant.id), created.session.user.id);
   assert.equal(plane.status().bootstrapRequired, false);
   assert.throws(() => plane.bootstrap({ email: "other@example.test", displayName: "Other User", password: "CorrectHorse7Battery", workspaceName: "Other" }), /already configured/u);
   plane.close();
@@ -58,6 +59,7 @@ test("administrator manages tenants, users and memberships without hardcoded ide
   assert.throws(() => plane.selectTenant(owner.token, second.id), /not authorized/u);
   const user = plane.adminCreateUser(owner.token, { email: "client@example.test", displayName: "Client User", password: "DifferentHorse8Battery", tenantId: second.id, role: "viewer" });
   plane.adminSetMembership(owner.token, { userId: user.id, tenantId: owner.session.tenant.id, role: "member", status: "active" });
+  assert.equal(plane.tenantStorageOwnerUserId(owner.session.tenant.id), owner.session.user.id);
   const snapshot = plane.adminSnapshot(owner.token);
   assert.equal(snapshot.tenants.length, 2);
   assert.equal(snapshot.users.length, 2);

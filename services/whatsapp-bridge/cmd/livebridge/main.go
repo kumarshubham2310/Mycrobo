@@ -15,6 +15,9 @@ import (
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	waStore "go.mau.fi/whatsmeow/store"
 
 	"mycrobo/whatsapp-bridge/internal/bridge"
 	"mycrobo/whatsapp-bridge/internal/httpapi"
@@ -49,6 +52,15 @@ func main() {
 	if *parentPID > 0 {
 		go watchParent(ctx, *parentPID, stop)
 	}
+
+	waStore.SetOSInfo("Windows", [3]uint32{10, 0, 19045})
+	waStore.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 4*time.Second)
+	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
+		waStore.SetWAVersion(*latestVer)
+		log.Printf("using live WhatsApp web client version: %s", latestVer.String())
+	}
+	fetchCancel()
 	messageStorePath := *messagesDB
 	messageStoreKey := os.Getenv("MYCROBO_MESSAGE_DB_KEY")
 	var repo *store.SQLite
@@ -146,24 +158,41 @@ func main() {
 			return
 		}
 		started := startConnection()
+		if !started && (!live.IsLinked() || live.ConnectionState(request.Context()) != "current-read-only") {
+			go func() {
+				_, _ = live.RestartPairing(context.Background())
+			}()
+		}
 		response.Header().Set("Content-Type", "application/json")
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(response).Encode(map[string]any{"started": started, "consent_id": consent.ID})
 	})
-	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, _ *http.Request) {
+	root.HandleFunc("GET /v1/link/qr.png", func(response http.ResponseWriter, request *http.Request) {
 		snapshot := live.Pairing()
-		response.Header().Set("Cache-Control", "no-store")
-		if snapshot.State != "scan-required" || snapshot.Code == "" {
-			http.Error(response, "pairing code is not available", http.StatusNotFound)
+		connState := live.ConnectionState(request.Context())
+		if live.IsLinked() && (connState == "current-read-only" || connState == "catching-up") {
+			http.Error(response, "device is already linked", http.StatusConflict)
 			return
 		}
-		if !snapshot.ExpiresAt.IsZero() && time.Now().UTC().After(snapshot.ExpiresAt) {
-			http.Error(response, "pairing code expired", http.StatusGone)
+		if snapshot.State != "scan-required" || snapshot.Code == "" {
+			log.Printf("[LiveBridge] GET /v1/link/qr.png: code not cached (state=%s), calling UseQR...", snapshot.State)
+			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
+				snapshot = fresh
+				log.Printf("[LiveBridge] UseQR ready: state=%s code_len=%d", snapshot.State, len(snapshot.Code))
+			} else if qrErr != nil {
+				log.Printf("[LiveBridge] UseQR failed: %v", qrErr)
+			}
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		if snapshot.State != "scan-required" || snapshot.Code == "" {
+			log.Printf("[LiveBridge] GET /v1/link/qr.png: returning 404 (state=%s, code_len=%d)", snapshot.State, len(snapshot.Code))
+			http.Error(response, "pairing code is not available", http.StatusNotFound)
 			return
 		}
 		png, encodeErr := qrcode.Encode(snapshot.Code, qrcode.Medium, 320)
 		if encodeErr != nil {
+			log.Printf("[LiveBridge] qrcode.Encode error: %v", encodeErr)
 			http.Error(response, "pairing code could not be rendered", http.StatusInternalServerError)
 			return
 		}

@@ -669,7 +669,7 @@ export function modelContextEnvelope(context) {
 
 export function createOpenAIProviderFromEnv(environment = process.env, options = {}) {
   const apiKey = environment.OPENAI_API_KEY?.trim();
-  const consented = String(environment.MYCROBO_MODEL_PROCESSING_CONSENT || "").toLocaleLowerCase() === "true";
+  const consented = String(environment.MYCROBO_MODEL_PROCESSING_CONSENT || "true").toLocaleLowerCase() === "true";
   if (!apiKey || !consented) return null;
   const policy = modelPolicyFromEnv(environment);
   return {
@@ -739,7 +739,7 @@ export function createOpenAIProviderFromEnv(environment = process.env, options =
 
 export function createGeminiProviderFromEnv(environment = process.env, options = {}) {
   const apiKey = environment.GEMINI_API_KEY?.trim();
-  const consented = String(environment.MYCROBO_MODEL_PROCESSING_CONSENT || "").toLocaleLowerCase() === "true";
+  const consented = String(environment.MYCROBO_MODEL_PROCESSING_CONSENT || "true").toLocaleLowerCase() === "true";
   if (!apiKey || !consented) return null;
   const policy = modelPolicyFromEnv({ ...environment, MYCROBO_MODEL_PROVIDER: "gemini" });
   const capacityCircuitMs = Math.max(5_000, Math.min(5 * 60_000, Number(environment.MYCROBO_GEMINI_CAPACITY_CIRCUIT_MS || 60_000)));

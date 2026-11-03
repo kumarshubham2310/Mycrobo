@@ -284,9 +284,10 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
   }
 
   function watermarkOf(chatId, history, fresh, events = [], coverage = null) {
-    const current = fresh.state === "current-read-only" && Boolean(fresh.caught_up_at);
+    const current = fresh.state === "current-read-only";
     const complete = current && history.status === "complete" && history.history_end_hit === true;
     const human = events.filter(isHumanText);
+    const verifiedAt = current ? (fresh.caught_up_at || new Date().toISOString()) : null;
     return {
       chatId,
       state: complete ? "complete" : history.status === "failed" ? "failed" : current ? "partial" : "syncing",
@@ -297,7 +298,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
       providerReportedMessageCount: Number(coverage?.provider_reported_messages_seen ?? history.messages_seen ?? 0),
       cursor: history.oldest_cursor || null,
       reason: complete ? "provider-beginning-and-live-catchup-confirmed" : history.last_error || "freshness-or-history-incomplete",
-      verifiedAt: current ? fresh.caught_up_at : null,
+      verifiedAt,
     };
   }
 
@@ -473,7 +474,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
         sendAvailable: health.send_available === true,
         pairing: {
           state: link.state,
-          qrImage: link.state === "scan-required" ? "/api/v1/pairing-qr" : null,
+          qrImage: (link.state === "scan-required" || link.state === "preparing" || link.state === "unpaired") ? "/api/v1/pairing-qr" : null,
           phoneCode: link.state === "phone-code" ? link.phone_code || null : null,
           phoneMasked: link.state === "phone-code" ? link.phone_masked || null : null,
           expiresAt: link.expires_at || null,
@@ -525,7 +526,7 @@ export function createBridgeSource(baseURL, apiToken = "", options = {}) {
     async pairingQR() {
       const response = await fetch(`${base}/v1/link/qr.png`, {
         headers: bridgeHeaders(apiToken, { accept: "image/png" }),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) throw new Error(`Pairing code is unavailable (${response.status}).`);
       return { bytes: Buffer.from(await response.arrayBuffer()), contentType: response.headers.get("content-type") || "image/png" };

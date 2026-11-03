@@ -1,8 +1,11 @@
 import { createServer } from "node:http";
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createServer as createNetServer } from "node:net";
+import { createHash, createHmac, randomUUID, randomBytes } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, chmodSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 
 import { chats, messagesByChat } from "./fixture-data.mjs";
 import { decideReply, isDisplayableEvent, isHumanText, latestVerifiedHumanMessage } from "../../packages/core/conversation.ts";
@@ -11,9 +14,9 @@ import { detectWritingMode } from "../../packages/core/relationship.ts";
 import { classifyDraftEditOutcome } from "../../packages/core/personalization-learning.ts";
 import { evaluateAutoSendPolicy } from "../../packages/core/auto-send-policy.ts";
 import { createDraftProviderFromEnv } from "./draft-provider.mjs";
-import { createBridgeSourceFromEnv } from "./bridge-source.mjs";
+import { createBridgeSource, createBridgeSourceFromEnv } from "./bridge-source.mjs";
 import { buildFollowUpItems, buildPendingItems, buildTaskItems } from "./workspace-items.mjs";
-import { AUTO_SEND_EXECUTION_CONSENT_VERSION, AUTO_SEND_POLICY_VERSION, createUserStateStoreFromEnv } from "./user-state.mjs";
+import { AUTO_SEND_EXECUTION_CONSENT_VERSION, AUTO_SEND_POLICY_VERSION, createUserStateStoreFromEnv, MemoryUserStateStore, SqliteUserStateStore } from "./user-state.mjs";
 import { buildCommunicationDNA, buildSyncTruth, buildVerifiedContext } from "./product-intelligence.mjs";
 import { authorizeGatewayRequest, authorizeSendBroker, contentFreeAuditRecord, createOperationsLogger, createRequestLimiter, opaqueCorrelationId } from "./runtime-security.mjs";
 import { calendarContextForText, contactForChat, enrichChatIdentity, importContextSource, integrationStatus } from "./context-sources.mjs";
@@ -26,10 +29,304 @@ import { authorizeGatewayCapability, normalizeGatewayRole, roleAllowsGatewayCapa
 import { AUTO_SEND_BUILD_CERTIFICATION_CONTRACT, autoSendBuildCertificationDigest, createGatewayAutoSendRuntime } from "./auto-send-gateway-runtime.mjs";
 import { createBridgeAutoSendDeliveryBoundary } from "./auto-send-bridge-delivery.mjs";
 import { AUTO_SEND_DURABLE_STORAGE_BINDING, AUTO_SEND_SAFETY_BINDING_CONTRACT, readAutoSendHostBootstrapFromFd } from "./auto-send-host-bootstrap.mjs";
+import { createRequire } from "node:module";
+import { WebAuthManager } from "./web-auth-manager.mjs";
+
+const esmRequire = createRequire(import.meta.url);
+let ControlPlane = null;
+try {
+  ({ ControlPlane } = esmRequire("../../desktop/electron/control-plane.cjs"));
+} catch {}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const clientRoot = join(here, "..", "..", "apps", "client");
 const DRAFT_CURRENT_STORY_LIMIT = 2_500;
+
+// ─── Per-Tenant Bridge Registry ──────────────────────────────────────────────
+// Manages isolated bridge processes per tenant so each user gets their own
+// WhatsApp session, message database, and linked-device credentials.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function freePort() {
+  return new Promise((res, rej) => {
+    const s = createNetServer();
+    s.unref();
+    s.once("error", rej);
+    s.listen(0, "127.0.0.1", () => {
+      const p = s.address().port;
+      s.close(() => res(p));
+    });
+  });
+}
+
+function resolveGoBinary() {
+  const candidates = [
+    "go",
+    "/usr/local/go/bin/go",
+    "/usr/bin/go",
+    "/snap/bin/go",
+    process.env.GOROOT ? resolve(process.env.GOROOT, "bin", "go") : null,
+    process.env.HOME ? resolve(process.env.HOME, "go", "bin", "go") : null,
+  ].filter(Boolean);
+  for (const cand of candidates) {
+    if (cand === "go") continue;
+    if (existsSync(cand)) return cand;
+  }
+  return "go";
+}
+
+class TenantBridgeRegistry {
+  constructor(managerConfig, createBridgeSourceFn) {
+    this._config = managerConfig || {};
+    this._createBridgeSource = createBridgeSourceFn;
+    this._bridges = new Map(); // tenantId → { bridgeSource, url, token, child, dataDir }
+    this._spawning = new Map(); // tenantId → Promise
+
+    // Register any bridges already running from start-web.mjs
+    if (this._config.activeBridges) {
+      for (const [tid, info] of Object.entries(this._config.activeBridges)) {
+        const bs = this._createBridgeSource(info.url, info.token);
+        this._bridges.set(tid, {
+          bridgeSource: bs,
+          url: info.url,
+          token: info.token,
+          child: null, // managed by parent process
+          pid: info.pid || null,
+          dataDir: info.tenantDataDir,
+        });
+      }
+    }
+  }
+
+  has(tenantId) {
+    return this._bridges.has(tenantId);
+  }
+
+  get(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    return entry?.bridgeSource || null;
+  }
+
+  dataDir(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    return entry?.dataDir || null;
+  }
+
+  async getOrSpawn(tenantId) {
+    if (this._bridges.has(tenantId)) return this._bridges.get(tenantId).bridgeSource;
+
+    // Deduplicate concurrent spawn requests
+    if (this._spawning.has(tenantId)) return this._spawning.get(tenantId);
+
+    const promise = this._spawnBridge(tenantId);
+    this._spawning.set(tenantId, promise);
+    try {
+      return await promise;
+    } finally {
+      this._spawning.delete(tenantId);
+    }
+  }
+
+  async _spawnBridge(tenantId) {
+    const appDataRoot = this._config.appDataRoot || (process.env.MYCROBO_USER_DATA_DIR ? dirname(process.env.MYCROBO_USER_DATA_DIR) : resolve(clientRoot, "..", "..", ".data"));
+    const rootDir = this._config.rootDir || resolve(clientRoot, "..", "..");
+    const bridgeExe = this._config.bridgeExePath;
+
+    if (bridgeExe && process.platform !== "win32" && existsSync(bridgeExe)) {
+      try { chmodSync(bridgeExe, 0o755); } catch { }
+    }
+
+    const tDir = resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tenantId}`);
+    mkdirSync(tDir, { recursive: true });
+
+    // Ensure per-tenant DB key
+    let dbKeyHex = "";
+    const keyFile = resolve(tDir, "db-key.bin");
+    if (existsSync(keyFile)) {
+      const raw = readFileSync(keyFile, "utf8").trim();
+      if (/^[0-9a-fA-F]{64}$/u.test(raw)) {
+        dbKeyHex = raw.toLowerCase();
+      } else {
+        const buf = Buffer.from(raw, "base64");
+        if (buf.length === 32) dbKeyHex = buf.toString("hex");
+      }
+    }
+    if (!dbKeyHex) {
+      const freshKey = randomBytes(32);
+      dbKeyHex = freshKey.toString("hex");
+      writeFileSync(keyFile, freshKey.toString("base64"), "utf8");
+    }
+
+    const bridgePort = await freePort();
+    const bridgeToken = randomBytes(32).toString("hex");
+
+    const bridgeArgs = [
+      "-listen", `127.0.0.1:${bridgePort}`,
+      "-api-token", bridgeToken,
+      "-messages-database", resolve(tDir, "messages.db"),
+      "-session-database", resolve(tDir, "linked-device.db"),
+      "-enable-text-send",
+      "-parent-pid", String(process.pid),
+    ];
+
+    const extraPaths = ["/usr/local/go/bin", "/usr/local/bin", "/usr/bin", "/bin", "/snap/bin"];
+    const currentPath = process.env.PATH || "";
+    const mergedPath = [...new Set([...extraPaths, ...currentPath.split(process.platform === "win32" ? ";" : ":")])].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+
+    const bridgeEnv = {
+      ...process.env,
+      PATH: mergedPath,
+      MYCROBO_BRIDGE_TOKEN: bridgeToken,
+      MYCROBO_MESSAGE_DB_KEY: dbKeyHex,
+      MYCROBO_AUTO_REBIND_ACCOUNT: "true",
+    };
+
+    const label = tenantId.slice(0, 12);
+    let child = null;
+    let spawnFailed = false;
+
+    const attachOutput = (c, name) => {
+      c.stdout?.on("data", (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) console.log(`[Bridge:${label}:${name}] ${msg}`);
+      });
+      c.stderr?.on("data", (chunk) => {
+        const msg = chunk.toString().trim();
+        if (msg) console.warn(`[Bridge:${label}:${name}:err] ${msg}`);
+      });
+    };
+
+    // 1. Try executable binary if present
+    if (bridgeExe && existsSync(bridgeExe)) {
+      try {
+        child = spawn(bridgeExe, bridgeArgs, {
+          cwd: rootDir,
+          env: bridgeEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        attachOutput(child, "bin");
+        child.on("error", (err) => {
+          console.warn(`[Bridge:${label}] Executable error: ${err.message}`);
+          spawnFailed = true;
+        });
+      } catch (err) {
+        console.warn(`[Bridge:${label}] Direct spawn failed: ${err.message}`);
+        spawnFailed = true;
+      }
+    } else {
+      spawnFailed = true;
+    }
+
+    // Check if binary exited immediately
+    if (child) {
+      await new Promise((r) => setTimeout(r, 600));
+      if (child.exitCode !== null || spawnFailed) {
+        console.warn(`[Bridge:${label}] Binary stopped (exit ${child.exitCode}); falling back to go run ./cmd/livebridge...`);
+        try { child.kill(); } catch { }
+        child = null;
+        spawnFailed = true;
+      }
+    }
+
+    // 2. Fallback to go run
+    if (!child || spawnFailed) {
+      try {
+        const goBin = resolveGoBinary();
+        console.log(`[Bridge:${label}] Spawning live bridge via '${goBin} run ./cmd/livebridge'...`);
+        child = spawn(goBin, ["run", "./cmd/livebridge", ...bridgeArgs], {
+          cwd: resolve(rootDir, "services", "whatsapp-bridge"),
+          env: bridgeEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        child.on("error", (err) => {
+          console.error(`[Bridge:${label}] Go run error: ${err.message}`);
+        });
+      } catch (e) {
+        console.warn(`[Bridge:${label}] Go run fallback failed: ${e.message}`);
+        return null;
+      }
+    }
+
+    if (!child) return null;
+
+    child.stdout?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge:${label}] ${msg}`);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const msg = chunk.toString().trim();
+      if (msg) console.log(`[Bridge:${label}] ${msg}`);
+    });
+    child.on("exit", () => { this._bridges.delete(tenantId); });
+
+    // Wait for health
+    const deadline = Date.now() + 45_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${bridgePort}/v1/health`, {
+          headers: { authorization: `Bearer ${bridgeToken}` },
+          signal: AbortSignal.timeout(1_000),
+        });
+        if (res.ok) { ready = true; break; }
+      } catch { }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    if (!ready) {
+      try { child.kill(); } catch { }
+      return null;
+    }
+
+    const url = `http://127.0.0.1:${bridgePort}`;
+    const bs = this._createBridgeSource(url, bridgeToken);
+    this._bridges.set(tenantId, { bridgeSource: bs, url, token: bridgeToken, child, pid: child?.pid || null, dataDir: tDir });
+    console.log(`[TenantBridgeRegistry] Bridge for ${tenantId} ready on port ${bridgePort}`);
+    return bs;
+  }
+
+  async killAndReset(tenantId) {
+    const entry = this._bridges.get(tenantId);
+    if (entry) {
+      if (entry.child && !entry.child.killed) {
+        try { entry.child.kill("SIGKILL"); } catch { }
+      } else if (entry.pid) {
+        try { process.kill(entry.pid, "SIGKILL"); } catch { }
+      }
+      this._bridges.delete(tenantId);
+    }
+    // Delete session database files so whatsmeow starts completely fresh
+    const appDataRoot = this._config.appDataRoot;
+    const tDir = entry?.dataDir
+      || (appDataRoot ? resolve(appDataRoot, "mycrobo-reboot", `tenant-data-${tenantId}`) : null);
+    if (tDir && existsSync(tDir)) {
+      for (const file of ["linked-device.db", "linked-device.db-shm", "linked-device.db-wal"]) {
+        const p = resolve(tDir, file);
+        if (existsSync(p)) {
+          try { unlinkSync(p); } catch { }
+        }
+      }
+    }
+    // Spawn fresh bridge
+    const freshBridge = await this.getOrSpawn(tenantId);
+    if (freshBridge?.startImport) {
+      try {
+        await freshBridge.startImport();
+      } catch (err) {
+        console.warn(`[TenantBridgeRegistry] startImport warning after reset for ${tenantId}:`, err.message);
+      }
+    }
+    return freshBridge;
+  }
+
+  shutdownAll() {
+    for (const [tid, entry] of this._bridges) {
+      if (entry.child && !entry.child.killed) {
+        try { entry.child.kill(); } catch { }
+      }
+    }
+  }
+}
 const DRAFT_RELATIONSHIP_EVIDENCE_LIMIT = 6_000;
 const DRAFT_TRANSLATION_BUDGET_MS = 750;
 
@@ -223,7 +520,55 @@ export async function refreshGoogleWhenStale({ googleConnector, sync, nowMs = Da
 export function createGatewayServer(options = {}) {
   const userStateStore = options.userStateStore || createUserStateStoreFromEnv();
   const userDataDir = options.userDataDir ?? process.env.MYCROBO_USER_DATA_DIR ?? "";
+  const controlPlaneDir = options.controlPlaneDir
+    || process.env.MYCROBO_CONTROL_PLANE_DIR
+    || (userDataDir ? dirname(userDataDir) : null);
+  let controlPlane = options.controlPlane || null;
+  if (!controlPlane && ControlPlane && controlPlaneDir) {
+    try {
+      controlPlane = new ControlPlane(controlPlaneDir);
+    } catch {
+      controlPlane = null;
+    }
+  }
   const tenantId = String(options.tenantId ?? process.env.MYCROBO_TENANT_ID ?? "").trim();
+  const ownerBindingFile = userDataDir ? join(userDataDir, "whatsapp-owner.json") : null;
+  let inMemoryWhatsAppOwner = null;
+
+  function getWhatsAppOwner() {
+    if (inMemoryWhatsAppOwner) return inMemoryWhatsAppOwner;
+    if (ownerBindingFile && existsSync(ownerBindingFile)) {
+      try {
+        const data = JSON.parse(readFileSync(ownerBindingFile, "utf8"));
+        if (data?.tenantId) {
+          inMemoryWhatsAppOwner = data;
+          return inMemoryWhatsAppOwner;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  function setWhatsAppOwner(newTenantId, newUserId) {
+    if (!newTenantId) return;
+    inMemoryWhatsAppOwner = {
+      tenantId: newTenantId,
+      userId: newUserId || null,
+      boundAt: new Date().toISOString(),
+    };
+    if (ownerBindingFile) {
+      try {
+        writeFileSync(ownerBindingFile, JSON.stringify(inMemoryWhatsAppOwner, null, 2), "utf8");
+      } catch {}
+    }
+  }
+
+  function clearWhatsAppOwner() {
+    inMemoryWhatsAppOwner = null;
+    if (ownerBindingFile && existsSync(ownerBindingFile)) {
+      try { unlinkSync(ownerBindingFile); } catch {}
+    }
+  }
   const authenticatedUserId = String(options.authenticatedUserId ?? process.env.MYCROBO_AUTH_USER_ID ?? "").trim();
   const trustedBuildVersion = String(options.buildVersion ?? process.env.MYCROBO_BUILD_VERSION ?? "development").trim().slice(0, 120) || "development";
   const configuredSubjectKey = options.autoSendSubjectKey ?? process.env.MYCROBO_USER_STATE_KEY ?? "";
@@ -240,6 +585,271 @@ export function createGatewayServer(options = {}) {
   const bridgeSource = options.bridgeSource === undefined
     ? createBridgeSourceFromEnv()
     : options.bridgeSource;
+
+  // ─── Per-Tenant Bridge Registry (multi-user isolation) ───────────────────
+  let bridgeManagerConfig = null;
+  try {
+    const raw = process.env.MYCROBO_BRIDGE_MANAGER;
+    if (raw) bridgeManagerConfig = JSON.parse(raw);
+  } catch { }
+  if (!bridgeManagerConfig) {
+    bridgeManagerConfig = {
+      bridgeExePath: process.platform === "win32"
+        ? resolve(clientRoot, "..", "..", "bin", "mycrobo-live-bridge.exe")
+        : resolve(clientRoot, "..", "..", "bin", "mycrobo-live-bridge"),
+      appDataRoot: userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"),
+      rootDir: resolve(clientRoot, "..", ".."),
+      defaultTenantId: tenantId,
+      hasBridgeExe: true,
+      activeBridges: {},
+    };
+  }
+  const tenantBridgeRegistry = new TenantBridgeRegistry(bridgeManagerConfig, (url, token) => {
+    return createBridgeSource(url, token);
+  });
+
+  // ─── Web Auth Manager (Zero-dependency JWT & multi-user store) ───────────
+  const authDataDir = options.authDataDir || (userDataDir ? dirname(userDataDir) : resolve(clientRoot, "..", "..", ".data"));
+  const webAuth = options.webAuth || new WebAuthManager(authDataDir);
+
+  function extractBearerToken(req) {
+    const auth = String(req?.headers?.authorization || "");
+    if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+    const cookie = String(req?.headers?.cookie || "");
+    const cookieMatch = cookie.match(/(?:^|;\s*)mycrobo_token=([^;]+)/);
+    if (cookieMatch) {
+      try { return decodeURIComponent(cookieMatch[1]).trim(); } catch {}
+    }
+    try {
+      const url = new URL(req.url, "http://127.0.0.1");
+      const param = url.searchParams.get("token");
+      if (param) return param.trim();
+    } catch {}
+    return "";
+  }
+
+  function unmaskAuthInput(input) {
+    if (input?.tokenPayload && typeof input.tokenPayload === "string") {
+      try {
+        let b64 = input.tokenPayload.replace(/-/g, "+").replace(/_/g, "/");
+        while (b64.length % 4) b64 += "=";
+        const binary = Buffer.from(b64, "base64");
+        const keyBytes = Buffer.from("mycrobo-secure-client-v1", "utf8");
+        const unmasked = Buffer.alloc(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          unmasked[i] = binary[i] ^ keyBytes[i % keyBytes.length];
+        }
+        const parsed = JSON.parse(unmasked.toString("utf8"));
+        return { ...input, ...parsed };
+      } catch {}
+    }
+    return input || {};
+  }
+
+  const authEnforced = Boolean(controlPlane || (webAuth && webAuth.hasUsers()));
+
+  function callerSession(req) {
+    const token = extractBearerToken(req);
+    if (webAuth && token) {
+      const payload = webAuth.verifyJwt(token);
+      if (payload && payload.userId && payload.tenantId) {
+        const session = {
+          id: `session-${payload.userId}`,
+          user: {
+            id: payload.userId,
+            email: payload.email,
+            displayName: payload.displayName,
+            platformAdmin: false,
+            status: "active",
+          },
+          tenant: {
+            id: payload.tenantId,
+            name: payload.workspaceName || `${payload.displayName}'s Workspace`,
+            role: "owner",
+            selected: true,
+            status: "active",
+          },
+        };
+        return {
+          authenticated: true,
+          isOwner: true,
+          isWorkspaceOwner: true,
+          tenantId: payload.tenantId,
+          userId: payload.userId,
+          session,
+          role: "owner",
+        };
+      }
+    }
+    if (controlPlane) {
+      if (token) {
+        try {
+          const session = controlPlane.sessionFromToken(token);
+          if (session) {
+            const callerTenantId = session.tenant?.id;
+            const callerRole = session.tenant?.role;
+            const isPlatformAdmin = session.user?.platformAdmin === true;
+            const isWorkspaceOwner = callerRole === "owner" || isPlatformAdmin;
+            const effectiveRole = callerRole || (isPlatformAdmin ? "owner" : authenticatedRole);
+            return {
+              authenticated: true,
+              isOwner: true,
+              isWorkspaceOwner,
+              tenantId: callerTenantId || tenantId,
+              userId: session.user?.id,
+              session,
+              role: effectiveRole,
+            };
+          }
+        } catch {}
+      }
+    }
+    if (securityPolicy.token && token && token === securityPolicy.token) {
+      return {
+        authenticated: true,
+        isOwner: authenticatedRole === "owner",
+        isWorkspaceOwner: authenticatedRole === "owner",
+        tenantId: tenantId || "development-tenant",
+        userId: authenticatedUserId || "development-user",
+        session: {
+          id: `desktop-session-${authenticatedUserId || "default"}`,
+          user: { id: authenticatedUserId || "development-user", status: "active" },
+          tenant: { id: tenantId || "development-tenant", role: authenticatedRole || "owner", status: "active" },
+        },
+        role: authenticatedRole || "owner",
+      };
+    }
+    if (!authEnforced) {
+      return {
+        authenticated: true,
+        isOwner: true,
+        isWorkspaceOwner: true,
+        tenantId: tenantId || "development-tenant",
+        userId: authenticatedUserId || "development-user",
+        session: {
+          id: `default-session-${authenticatedUserId || "default"}`,
+          user: { id: authenticatedUserId || "development-user", status: "active" },
+          tenant: { id: tenantId || "development-tenant", role: "owner", status: "active" },
+        },
+        role: authenticatedRole || "owner",
+      };
+    }
+    return { authenticated: false, isOwner: false, isWorkspaceOwner: false, tenantId: null, session: null, role: "" };
+  }
+
+  // Get the correct bridge source for a given tenant
+  function bridgeForTenant(callerTenantId) {
+    if (!tenantBridgeRegistry) return bridgeSource;
+    if (!callerTenantId) return bridgeSource;
+    const tb = tenantBridgeRegistry.get(callerTenantId);
+    if (tb) return tb;
+    // Fallback to default bridge only if caller IS the default tenant
+    if (callerTenantId === tenantId) return bridgeSource;
+    return null; // No bridge for this tenant yet
+  }
+
+  async function bridgeForTenantOrSpawn(callerTenantId) {
+    if (!tenantBridgeRegistry) return bridgeSource;
+    if (!callerTenantId) return bridgeSource;
+    const existing = tenantBridgeRegistry.get(callerTenantId);
+    if (existing) return existing;
+    if (callerTenantId === tenantId) return bridgeSource;
+    // Spawn a new bridge for this tenant
+    const spawned = await tenantBridgeRegistry.getOrSpawn(callerTenantId);
+    return spawned || null;
+  }
+
+  async function getBridgeForRequest(req, { spawnIfNeeded = false } = {}) {
+    const caller = callerSession(req);
+    const targetTenant = caller.tenantId || tenantId;
+    if (tenantBridgeRegistry && targetTenant) {
+      if (spawnIfNeeded) {
+        try {
+          const spawned = await tenantBridgeRegistry.getOrSpawn(targetTenant);
+          if (spawned) return spawned;
+        } catch (err) {
+          console.warn(`[Gateway] Failed to spawn bridge for ${targetTenant}: ${err.message}`);
+        }
+      }
+      const existing = tenantBridgeRegistry.get(targetTenant);
+      if (existing) return existing;
+    }
+    if (bridgeSource) return bridgeSource;
+    if (tenantBridgeRegistry && tenantId) {
+      if (spawnIfNeeded) {
+        try {
+          const defaultSpawned = await tenantBridgeRegistry.getOrSpawn(tenantId);
+          if (defaultSpawned) return defaultSpawned;
+        } catch { }
+      }
+      const defaultExisting = tenantBridgeRegistry.get(tenantId);
+      if (defaultExisting) return defaultExisting;
+    }
+    if (tenantBridgeRegistry) {
+      for (const entry of tenantBridgeRegistry._bridges.values()) {
+        if (entry.bridgeSource) return entry.bridgeSource;
+      }
+    }
+    if (spawnIfNeeded && tenantBridgeRegistry) {
+      await new Promise((r) => setTimeout(r, 600));
+      for (const entry of tenantBridgeRegistry._bridges.values()) {
+        if (entry.bridgeSource) return entry.bridgeSource;
+      }
+    }
+    return null;
+  }
+
+  const callerStateStores = new Map();
+
+  function getUserStateStore(caller) {
+    if (!caller || !caller.authenticated || !caller.tenantId) {
+      return userStateStore;
+    }
+    if (caller.tenantId === tenantId && (!caller.userId || caller.userId === authenticatedUserId)) {
+      return userStateStore;
+    }
+    const storeKey = `${caller.tenantId}:${caller.userId || "default"}`;
+    if (callerStateStores.has(storeKey)) {
+      return callerStateStores.get(storeKey);
+    }
+
+    const tDir = tenantBridgeRegistry?.dataDir(caller.tenantId)
+      || (userDataDir ? resolve(dirname(userDataDir), `tenant-data-${caller.tenantId}`) : null)
+      || (authDataDir ? resolve(authDataDir, `tenant-data-${caller.tenantId}`) : null);
+
+    let store;
+    if (tDir) {
+      try {
+        mkdirSync(tDir, { recursive: true });
+        let key = options.vaultKey || process.env.MYCROBO_USER_STATE_KEY || null;
+        const keyFile = resolve(tDir, "db-key.bin");
+        if (existsSync(keyFile)) {
+          const raw = readFileSync(keyFile, "utf8").trim();
+          if (raw) key = raw;
+        }
+        const resolvedUserId = caller.userId && /^user-[a-f\d]{24}$/u.test(caller.userId)
+          ? caller.userId
+          : `user-${caller.tenantId.slice(7)}00000000`;
+        const userDbDir = resolve(tDir, "users", resolvedUserId);
+        mkdirSync(userDbDir, { recursive: true });
+        store = new SqliteUserStateStore(
+          resolve(userDbDir, "workspace.db"),
+          key,
+          caller.tenantId,
+          resolve(userDbDir, "user-state.json"),
+          resolvedUserId,
+          resolve(tDir, "workspace.db")
+        );
+      } catch {
+        store = new MemoryUserStateStore();
+      }
+    } else {
+      store = new MemoryUserStateStore();
+    }
+
+    callerStateStores.set(storeKey, store);
+    return store;
+  }
   const googleConnector = options.googleConnector || createGoogleContextConnectorFromEnv({
     ...process.env,
     MYCROBO_TENANT_ID: tenantId,
@@ -433,20 +1043,24 @@ export function createGatewayServer(options = {}) {
     try { return await googleSyncPromise; } finally { googleSyncPromise = null; }
   }
 
-  async function workspaceItems() {
-    if (bridgeSource?.workspace) return bridgeSource.workspace();
-    return chats.map((chat) => {
-      const view = viewOfChat(chat);
-      return {
-        chat: canonicalChatOf(chat),
-        latest: materializeEvents(chat.id).at(-1) || view.latest,
-        state: { chat_id: chat.id, updated_at: chat.latestVerifiedAt, commitments: [] },
-      };
-    });
+  async function workspaceItems(bridge = null, isSingleTenant = false) {
+    if (bridge?.workspace) return await bridge.workspace();
+    if (isSingleTenant) {
+      if (bridgeSource?.workspace) return await bridgeSource.workspace();
+      return chats.map((chat) => {
+        const view = viewOfChat(chat);
+        return {
+          chat: canonicalChatOf(chat),
+          latest: materializeEvents(chat.id).at(-1) || view.latest,
+          state: { chat_id: chat.id, updated_at: chat.latestVerifiedAt, commitments: [] },
+        };
+      });
+    }
+    return [];
   }
 
-  async function workspacePayload() {
-    const [items, saved] = await Promise.all([workspaceItems(), userStateStore.snapshot()]);
+  async function workspacePayload(bridge = null, store = userStateStore, isSingleTenant = false) {
+    const [items, saved] = await Promise.all([workspaceItems(bridge, isSingleTenant), store.snapshot()]);
     return {
       pending: buildPendingItems(items).filter((item) => saved.decisions?.[item.id]?.status !== "dismissed"),
       tasks: buildTaskItems(items, saved),
@@ -455,29 +1069,29 @@ export function createGatewayServer(options = {}) {
     };
   }
 
-  async function syncTruthPayload() {
-    if (!bridgeSource) {
+  async function syncTruthPayload(targetBridge = bridgeSource) {
+    if (!targetBridge) {
       const active = chats.filter((chat) => chat.collection === "active").map(viewOfChat);
       const archived = chats.filter((chat) => chat.collection === "archived").map(viewOfChat);
       return buildSyncTruth({ status: { connected: true, connectionState: "fixture" }, active, archived });
     }
     const [status, active, archived, storage] = await Promise.all([
-      bridgeSource.status(),
-      bridgeSource.listChats("active"),
-      bridgeSource.listChats("archived"),
-      typeof bridgeSource.storage === "function" ? bridgeSource.storage().catch(() => null) : Promise.resolve(null),
+      targetBridge.status(),
+      targetBridge.listChats("active"),
+      targetBridge.listChats("archived"),
+      typeof targetBridge.storage === "function" ? targetBridge.storage().catch(() => null) : Promise.resolve(null),
     ]);
     return buildSyncTruth({ status, active, archived, storage });
   }
 
-  async function intelligencePayload(chatId) {
-    const imported = await userStateStore.integrations();
-    if (bridgeSource) {
+  async function intelligencePayload(chatId, targetBridge = bridgeSource, targetStore = userStateStore) {
+    const imported = await targetStore.integrations();
+    if (targetBridge) {
       const [bundle, conversationState, allEvents, style] = await Promise.all([
-        bridgeSource.bundle(chatId),
-        bridgeSource.conversationState ? bridgeSource.conversationState(chatId) : Promise.resolve(null),
-        bridgeSource.toneEvents(chatId),
-        userStateStore.chatStyle(chatId),
+        targetBridge.bundle(chatId),
+        targetBridge.conversationState ? targetBridge.conversationState(chatId) : Promise.resolve(null),
+        targetBridge.toneEvents ? targetBridge.toneEvents(chatId) : Promise.resolve([]),
+        targetStore.chatStyle(chatId),
       ]);
       const latest = latestVerifiedHumanMessage(bundle.events);
       const contact = contactForChat(bundle.chat, imported.contacts);
@@ -500,7 +1114,7 @@ export function createGatewayServer(options = {}) {
     return {
       context: buildVerifiedContext({ ...view, events }, null),
       dna: buildCommunicationDNA(canonical, events, events),
-      style: await userStateStore.chatStyle(chatId),
+      style: await targetStore.chatStyle(chatId),
       externalContext: {
         contact: contact ? { resolved: true, displayName: contact.displayName } : { resolved: false },
         calendar: calendarContextForText(latestVerifiedHumanMessage(events)?.text || "", imported.calendar),
@@ -508,9 +1122,9 @@ export function createGatewayServer(options = {}) {
     };
   }
 
-  async function autoSendSubjectsForChat(chatId) {
-    if (bridgeSource) {
-      const bundle = await bridgeSource.bundle(chatId);
+  async function autoSendSubjectsForChat(chatId, targetBridge = bridgeSource) {
+    if (targetBridge) {
+      const bundle = await targetBridge.bundle(chatId);
       const ownerIds = Array.isArray(bundle.ownerIds) && bundle.ownerIds.length ? bundle.ownerIds : ["owner"];
       const personId = bundle.chat?.kind === "direct" ? draftPersonId(bundle.chat, bundle.events, ownerIds) : null;
       return {
@@ -766,11 +1380,17 @@ export function createGatewayServer(options = {}) {
     }
   }
 
-  async function connectionPayload() {
-    const [saved, google, runtime] = await Promise.all([
+  async function connectionPayload(req) {
+    let runtime = { connected: false, connectionState: "offline" };
+    try {
+      const bridge = await getBridgeForRequest(req, { spawnIfNeeded: false });
+      if (bridge?.status) {
+        runtime = await bridge.status().catch(() => ({ connected: false, connectionState: "offline" }));
+      }
+    } catch { }
+    const [saved, google] = await Promise.all([
       userStateStore.integrations(),
       typeof googleConnector.status === "function" ? googleConnector.status() : Promise.resolve(null),
-      bridgeSource?.status ? bridgeSource.status().catch(() => ({ connected: false, connectionState: "offline" })) : Promise.resolve({ connected: true, connectionState: "fixture" }),
     ]);
     return integrationStatus({ ...saved, google }, {
       whatsappConnected: runtime.connected === true,
@@ -816,14 +1436,62 @@ export function createGatewayServer(options = {}) {
         auditLogger(contentFreeAuditRecord({ request, pathname: auditedPath, status: response.statusCode, durationMs: Date.now() - startedAt, correlationId }));
       } catch { /* diagnostics must never interrupt the product */ }
     });
-    response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+    response.setHeader("content-security-policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("x-frame-options", "DENY");
     response.setHeader("referrer-policy", "no-referrer");
     response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      auditedPath = url.pathname;
+
+      if (url.pathname.startsWith("/api/v1/auth/")) {
+        if (url.pathname === "/api/v1/auth/status") {
+          if (request.method !== "GET") return json(response, 405, { error: "Use GET for auth status." });
+          const caller = callerSession(request);
+          return json(response, 200, {
+            authenticated: caller.authenticated,
+            bootstrapRequired: false,
+            user: caller.session?.user || null,
+            tenant: caller.session?.tenant || null,
+          });
+        }
+        if (url.pathname === "/api/v1/auth/signup") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign up." });
+          try {
+            const rawInput = await readJSON(request, 16_384);
+            const input = unmaskAuthInput(rawInput);
+            const created = webAuth.signup({
+              email: input.email,
+              displayName: input.displayName,
+              password: input.password,
+              workspaceName: input.workspaceName || input.tenantName,
+            });
+            response.setHeader("Set-Cookie", `mycrobo_token=${encodeURIComponent(created.token)}; Path=/; HttpOnly; SameSite=Lax`);
+            return json(response, 200, { authenticated: true, token: created.token, session: created.session });
+          } catch (err) {
+            return json(response, 400, { error: err instanceof Error ? err.message : "Registration failed." });
+          }
+        }
+        if (url.pathname === "/api/v1/auth/login") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign in." });
+          try {
+            const rawInput = await readJSON(request, 16_384);
+            const input = unmaskAuthInput(rawInput);
+            const loggedIn = webAuth.login({ email: input.email, password: input.password });
+            response.setHeader("Set-Cookie", `mycrobo_token=${encodeURIComponent(loggedIn.token)}; Path=/; HttpOnly; SameSite=Lax`);
+            return json(response, 200, { authenticated: true, token: loggedIn.token, session: loggedIn.session });
+          } catch (err) {
+            return json(response, 401, { error: err instanceof Error ? err.message : "Sign in failed." });
+          }
+        }
+        if (url.pathname === "/api/v1/auth/logout") {
+          if (request.method !== "POST") return json(response, 405, { error: "Use POST to sign out." });
+          response.setHeader("Set-Cookie", "mycrobo_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax");
+          return json(response, 200, { signedOut: true });
+        }
+        return json(response, 404, { error: "Unknown auth endpoint." });
+      }
+
       if (url.pathname === "/oauth/google/callback") {
         if (request.method !== "GET") return oauthResult(response, false, "Use the Google sign-in link from MyCrobo.");
         const callbackLimit = oauthCallbackLimiter.check(request);
@@ -831,7 +1499,9 @@ export function createGatewayServer(options = {}) {
           response.setHeader("retry-after", String(callbackLimit.retryAfterSeconds));
           return oauthResult(response, false, "Too many Google callback attempts. Wait briefly and try again.", 429);
         }
-        const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: authenticatedRole });
+        const caller = callerSession(request);
+        const capabilityRole = caller.role || authenticatedRole;
+        const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: capabilityRole });
         if (!capability.ok) return oauthResult(response, false, "This workspace role cannot change connected services.", capability.status);
         try {
           const result = await googleConnector.complete({ state: url.searchParams.get("state"), code: url.searchParams.get("code"), error: url.searchParams.get("error") });
@@ -842,7 +1512,9 @@ export function createGatewayServer(options = {}) {
       }
       const authorization = authorizeGatewayRequest(request, securityPolicy);
       if (!authorization.ok) return json(response, authorization.status, { error: "The private application session is not authorized.", code: authorization.code });
-      const capability = authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: authenticatedRole });
+      const caller = callerSession(request);
+      const capabilityRole = caller.role || authenticatedRole;
+      const capability =  authorizeGatewayCapability({ method: request.method, pathname: url.pathname, role: capabilityRole });
       if (!capability.ok) return json(response, capability.status, {
         error: capability.code === "ROLE_CAPABILITY_DENIED"
           ? "This workspace role has read-only access to this operation."
@@ -861,14 +1533,19 @@ export function createGatewayServer(options = {}) {
           channel: process.env.MYCROBO_BUILD_CHANNEL || "development",
           buildId: process.env.MYCROBO_BUILD_ID || "unversioned",
         };
-        if (bridgeSource) return json(response, 200, { ...(await bridgeSource.status()), ...build, automaticDelivery: autoSendRuntime.status() });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) {
+          return json(response, 200, { ...(await bridge.status()), ...build, automaticDelivery: autoSendRuntime.status() });
+        }
         return json(response, 200, {
           ...build,
           apiVersion: "1.0",
-          connector: "fixture",
-          connected: true,
-          readOnly: true,
+          connector: "personal-pilot",
+          connected: false,
+          connectionState: "offline",
+          readOnly: false,
           sendAvailable: false,
+          pairing: { state: "unpaired", qrImage: "/api/v1/pairing-qr" },
           automaticDelivery: autoSendRuntime.status(),
         });
       }
@@ -909,17 +1586,33 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/integrations") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for connections." });
-        return json(response, 200, await connectionPayload());
+        return json(response, 200, await connectionPayload(request));
       }
       if (url.pathname === "/api/v1/integrations/whatsapp/logout") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to log out WhatsApp." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
         if (request.headers["x-mycrobo-confirm"] !== "LOG OUT WHATSAPP") return json(response, 409, { error: "Explicit WhatsApp logout confirmation is required." });
-        if (!bridgeSource?.logout) return json(response, 404, { error: "WhatsApp logout is unavailable in this build." });
-        try {
-          return json(response, 200, await bridgeSource.logout());
-        } catch (error) {
-          return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not be logged out." });
+        const targetTenant = caller.tenantId || tenantId;
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge?.logout) {
+          try {
+            await bridge.logout();
+          } catch (err) {
+            console.warn(`[Gateway] bridge.logout() notice for ${targetTenant}:`, err.message);
+          }
         }
+        if (tenantBridgeRegistry) {
+          await tenantBridgeRegistry.killAndReset(targetTenant);
+        } else if (userDataDir) {
+          for (const f of ["linked-device.db", "linked-device.db-shm", "linked-device.db-wal"]) {
+            const p = resolve(userDataDir, f);
+            if (existsSync(p)) {
+              try { unlinkSync(p); } catch { }
+            }
+          }
+        }
+        return json(response, 200, { logged_out: true, local_history_preserved: true });
       }
       if (url.pathname === "/api/v1/integrations/google/start") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect Google." });
@@ -973,12 +1666,20 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/storage") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for storage status." });
-        if (typeof bridgeSource?.storage !== "function") return json(response, 200, { available: false });
-        const [storage, legacy] = await Promise.all([bridgeSource.storage(), legacyRecoveryStatus(userDataDir)]);
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 200, { available: false });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (typeof bridge?.storage !== "function") return json(response, 200, { available: false });
+        const tenantDir = tenantBridgeRegistry?.dataDir(caller.tenantId) || userDataDir;
+        const [storage, legacy] = await Promise.all([bridge.storage(), legacyRecoveryStatus(tenantDir)]);
         return json(response, 200, { available: true, ...storage, legacy_recovery_bytes: legacy.bytes });
       }
       if (url.pathname === "/api/v1/sync-truth") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for sync truth." });
+        if (controlPlane) {
+          const caller = callerSession(request);
+          if (caller.authenticated && !caller.isOwner) return json(response, 200, { syncTruth: null });
+        }
         return json(response, 200, await syncTruthPayload());
       }
       if (url.pathname === "/api/v1/privacy/export") {
@@ -1041,56 +1742,97 @@ export function createGatewayServer(options = {}) {
           localAccessControl: process.env.MYCROBO_USER_DATA_DIR ? "owner-only-vault" : "development-directory",
           ordinaryStartupSend: securityPolicy.sendBrokerToken ? "native-confirmation-only" : "development-gateway",
           legacyRecovery: { available: legacy.available, bytes: legacy.bytes, removable: legacy.removable },
-          contextSources: await connectionPayload(),
+          contextSources: await connectionPayload(request),
         });
       }
+      if (url.pathname.startsWith("/api/v1/pairing-")) {
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to pair WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
+        }
+      }
       if (url.pathname === "/api/v1/pairing-qr") {
-        if (!bridgeSource?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
-        const qr = await bridgeSource.pairingQR();
-        response.writeHead(200, { "content-type": qr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
-        response.end(qr.bytes);
-        return;
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.pairingQR) return json(response, 404, { error: "Pairing code is unavailable." });
+        try {
+          const qr = await bridge.pairingQR();
+          response.writeHead(200, { "content-type": qr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+          response.end(qr.bytes);
+          return;
+        } catch (err) {
+          if (bridge?.useQRPairing || bridge?.restartPairing) {
+            try {
+              if (bridge.useQRPairing) await bridge.useQRPairing();
+              else if (bridge.restartPairing) await bridge.restartPairing();
+              const freshQr = await bridge.pairingQR();
+              response.writeHead(200, { "content-type": freshQr.contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+              response.end(freshQr.bytes);
+              return;
+            } catch {}
+          }
+          return json(response, 409, { error: err instanceof Error ? err.message : "Pairing code is unavailable." });
+        }
       }
       if (url.pathname === "/api/v1/pairing-phone") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to request a phone linking code." });
-        if (!bridgeSource?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge?.pairByPhone) return json(response, 404, { error: "Phone-number linking is unavailable in this build." });
         const input = await readJSON(request, 1024);
         const phone = typeof input.phone === "string" ? input.phone.trim() : "";
         if (!/^\+[1-9]\d{6,14}$/u.test(phone)) return json(response, 400, { error: "Enter the complete international number, including its country code." });
         try {
-          return json(response, 201, await bridgeSource.pairByPhone(phone));
+          return json(response, 201, await bridge.pairByPhone(phone));
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not create a phone linking code." });
         }
       }
       if (url.pathname === "/api/v1/pairing-use-qr") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to switch to QR linking." });
-        if (!bridgeSource?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 503, { error: "WhatsApp bridge is initializing. Please try again in a moment." });
+        if (!bridge?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
         try {
-          return json(response, 200, await bridgeSource.useQRPairing());
+          return json(response, 200, await bridge.useQRPairing());
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "A fresh QR code is not ready yet." });
         }
       }
       if (url.pathname === "/api/v1/pairing-restart") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to start a fresh linking session." });
-        if (!bridgeSource?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 503, { error: "WhatsApp bridge is initializing. Please try again in a moment." });
+        if (!bridge?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
         try {
-          return json(response, 200, await bridgeSource.restartPairing());
+          return json(response, 200, await bridge.restartPairing());
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "WhatsApp could not start a fresh linking session." });
         }
       }
       if (url.pathname === "/api/v1/events") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for live updates." });
-        if (!bridgeSource?.events) {
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          response.writeHead(401, { "cache-control": "no-store" });
+          response.end();
+          return;
+        }
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.events) {
           response.writeHead(204, { "cache-control": "no-store" });
           response.end();
           return;
         }
         const controller = new AbortController();
         response.once("close", () => controller.abort());
-        const upstream = await bridgeSource.events(controller.signal);
+        const upstream = await bridge.events(controller.signal);
         response.writeHead(200, {
           "content-type": "text/event-stream; charset=utf-8",
           "cache-control": "no-cache, no-store",
@@ -1110,12 +1852,21 @@ export function createGatewayServer(options = {}) {
         }
         return;
       }
+      if (url.pathname.startsWith("/api/v1/media/")) {
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Attachment not found in your workspace." });
+        }
+      }
       const mediaRetryMatch = /^\/api\/v1\/media\/([^/]+)\/retry$/u.exec(url.pathname);
       if (mediaRetryMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to fetch an attachment." });
-        if (!bridgeSource?.retryMedia) return json(response, 503, { error: "Reconnect WhatsApp to fetch this attachment." });
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.retryMedia) return json(response, 503, { error: "Reconnect WhatsApp to fetch this attachment." });
         try {
-          return json(response, 202, await bridgeSource.retryMedia(decodeURIComponent(mediaRetryMatch[1])));
+          return json(response, 202, await bridge.retryMedia(decodeURIComponent(mediaRetryMatch[1])));
         } catch (error) {
           return json(response, 409, { error: error instanceof Error ? error.message : "Attachment could not be fetched." });
         }
@@ -1123,8 +1874,11 @@ export function createGatewayServer(options = {}) {
       const mediaMatch = /^\/api\/v1\/media\/([^/]+)$/u.exec(url.pathname);
       if (mediaMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET to view an attachment." });
-        if (!bridgeSource?.media) return json(response, 404, { error: "Media is unavailable." });
-        const media = await bridgeSource.media(decodeURIComponent(mediaMatch[1]));
+        const caller = callerSession(request);
+        if (!caller.authenticated) return json(response, 401, { error: "Authentication required." });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge?.media) return json(response, 404, { error: "Media is unavailable." });
+        const media = await bridge.media(decodeURIComponent(mediaMatch[1]));
         response.removeHeader("x-frame-options");
         response.setHeader("content-security-policy", "default-src 'none'; frame-ancestors 'self'");
         response.setHeader("accept-ranges", "bytes");
@@ -1151,25 +1905,43 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/workspace") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for the workspace." });
-        return json(response, 200, await workspacePayload());
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to view workspace.", code: "AUTHENTICATION_REQUIRED" });
+        }
+        if (controlPlane && caller.authenticated && !caller.isOwner) {
+          return json(response, 200, {
+            tasks: [],
+            followUps: [],
+            pending: [],
+            decisions: [],
+            intelligence: { relationshipCount: 0 },
+          });
+        }
+        const isSingleTenant = !authEnforced;
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        return json(response, 200, await workspacePayload(bridge, store, isSingleTenant));
       }
       if (url.pathname === "/api/v1/preferences") {
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         const autonomyAction = String(url.searchParams.get("autonomy") || "").trim();
         if (autonomyAction) {
-          if (request.method === "GET" && autonomyAction === "policy") return json(response, 200, await tenantAutonomyPayload());
+          if (request.method === "GET" && autonomyAction === "policy") return json(response, 200, await tenantAutonomyPayload(store));
           if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for automatic delivery configuration." });
           try {
             const input = await readJSON(request, 4_096);
             if (autonomyAction === "policy") {
               assertInputKeys(input, ["mode", "allowGroups"]);
-              await userStateStore.setAutoSendPolicyLayer({
+              await store.setAutoSendPolicyLayer({
                 layerKind: "tenant",
                 mode: input.mode,
                 allowGroups: input.allowGroups === true,
               });
             } else if (autonomyAction === "grant") {
               assertInputKeys(input, ["confirmed", "consentVersion", "policyVersion"]);
-              await userStateStore.grantAutoSendExecutionConsent({
+              await store.grantAutoSendExecutionConsent({
                 version: input.consentVersion,
                 policyVersion: input.policyVersion,
                 buildVersion: trustedBuildVersion,
@@ -1178,33 +1950,49 @@ export function createGatewayServer(options = {}) {
             } else if (["revoke", "emergency-stop"].includes(autonomyAction)) {
               assertInputKeys(input, ["confirmed"]);
               if (input.confirmed !== true) throw new Error("Confirm this automatic delivery safety action explicitly.");
-              await userStateStore.revokeAutoSendExecutionConsent();
+              await store.revokeAutoSendExecutionConsent();
             } else {
               return json(response, 400, { error: "Choose a valid automatic delivery configuration action." });
             }
-            return json(response, 200, await tenantAutonomyPayload());
+            return json(response, 200, await tenantAutonomyPayload(store));
           } catch (error) {
             return json(response, 400, { error: error instanceof Error ? error.message : "Automatic delivery configuration is invalid." });
           }
         }
-        if (request.method === "GET") return json(response, 200, await userStateStore.preferences());
+        if (request.method === "GET") return json(response, 200, await store.preferences());
         if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for preferences." });
         try {
-          return json(response, 200, await userStateStore.setPreferences(await readJSON(request)));
+          return json(response, 200, await store.setPreferences(await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Preferences are invalid." });
         }
       }
       if (url.pathname === "/api/v1/autonomy") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for sending safeguards." });
-        return json(response, 200, await tenantAutonomyPayload());
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
+        return json(response, 200, await tenantAutonomyPayload(store));
+      }
+      if (url.pathname.startsWith("/api/v1/chats/")) {
+        const caller = callerSession(request);
+        if (authEnforced) {
+          if (!caller.authenticated) {
+            return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
+          }
+          if (controlPlane && !caller.isOwner) {
+            return json(response, 404, { error: "Chat not found in your workspace." });
+          }
+        }
       }
       const autonomyMatch = /^\/api\/v1\/chats\/([^/]+)\/autonomy$/u.exec(url.pathname);
       if (autonomyMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for conversation sending safeguards." });
         const chatId = decodeURIComponent(autonomyMatch[1]);
+        const caller = callerSession(request);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 200, await chatAutonomyPayload(chatId));
+          return json(response, 200, await chatAutonomyPayload(chatId, bridge, store));
         } catch (error) {
           return json(response, 404, { error: error instanceof Error ? error.message : "Conversation policy is unavailable." });
         }
@@ -1212,8 +2000,15 @@ export function createGatewayServer(options = {}) {
       const intelligenceMatch = /^\/api\/v1\/chats\/([^/]+)\/intelligence$/u.exec(url.pathname);
       if (intelligenceMatch) {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for verified context." });
+        const caller = callerSession(request);
+        const chatId = decodeURIComponent(intelligenceMatch[1]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (!bridge && authEnforced) {
+          return json(response, 404, { error: "Chat not found in your workspace." });
+        }
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 200, await intelligencePayload(decodeURIComponent(intelligenceMatch[1])));
+          return json(response, 200, await intelligencePayload(chatId, bridge, store));
         } catch (error) {
           return json(response, 404, { error: error instanceof Error ? error.message : "Verified context is unavailable." });
         }
@@ -1221,9 +2016,12 @@ export function createGatewayServer(options = {}) {
       const styleMatch = /^\/api\/v1\/chats\/([^/]+)\/style$/u.exec(url.pathname);
       if (styleMatch) {
         const chatId = decodeURIComponent(styleMatch[1]);
+        const caller = callerSession(request);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
         if (url.searchParams.get("autonomy") === "policy") {
           if (request.method === "GET") {
-            try { return json(response, 200, await chatAutonomyPayload(chatId)); }
+            try { return json(response, 200, await chatAutonomyPayload(chatId, bridge, store)); }
             catch (error) { return json(response, 404, { error: error instanceof Error ? error.message : "Conversation policy is unavailable." }); }
           }
           if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for the conversation delivery policy." });
@@ -1232,30 +2030,30 @@ export function createGatewayServer(options = {}) {
             assertInputKeys(input, ["scope", "mode"]);
             const scope = String(input.scope || "");
             if (!["chat", "relationship"].includes(scope)) throw new Error("Choose this conversation or this relationship for the delivery policy.");
-            const subjects = await autoSendSubjectsForChat(chatId);
+            const subjects = await autoSendSubjectsForChat(chatId, bridge);
             const subjectId = scope === "chat" ? subjects.chatSubjectId : subjects.relationshipSubjectId;
             if (!subjectId) throw new Error("A relationship-wide policy is available only for a verified direct conversation.");
             if (input.mode === "inherit") {
-              await userStateStore.removeAutoSendPolicyLayer(scope, subjectId);
+              await store.removeAutoSendPolicyLayer(scope, subjectId);
             } else {
-              await userStateStore.setAutoSendPolicyLayer({ layerKind: scope, subjectId, mode: input.mode, allowGroups: false });
+              await store.setAutoSendPolicyLayer({ layerKind: scope, subjectId, mode: input.mode, allowGroups: false });
             }
-            const style = await userStateStore.chatStyle(chatId);
+            const style = await store.chatStyle(chatId);
             if (scope === "relationship") {
-              await userStateStore.removeAutoSendPolicyLayer("chat", subjects.chatSubjectId);
-              await userStateStore.setChatStyle(chatId, { ...style, sendingMode: "inherit" });
+              await store.removeAutoSendPolicyLayer("chat", subjects.chatSubjectId);
+              await store.setChatStyle(chatId, { ...style, sendingMode: "inherit" });
             } else {
-              await userStateStore.setChatStyle(chatId, { ...style, sendingMode: input.mode });
+              await store.setChatStyle(chatId, { ...style, sendingMode: input.mode });
             }
-            return json(response, 200, await chatAutonomyPayload(chatId));
+            return json(response, 200, await chatAutonomyPayload(chatId, bridge, store));
           } catch (error) {
             return json(response, 400, { error: error instanceof Error ? error.message : "Conversation delivery policy is invalid." });
           }
         }
-        if (request.method === "GET") return json(response, 200, await userStateStore.chatStyle(chatId));
+        if (request.method === "GET") return json(response, 200, await store.chatStyle(chatId));
         if (request.method !== "PUT") return json(response, 405, { error: "Use GET or PUT for conversation style." });
         try {
-          return json(response, 200, await userStateStore.setChatStyle(chatId, await readJSON(request)));
+          return json(response, 200, await store.setChatStyle(chatId, await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Conversation style is invalid." });
         }
@@ -1263,8 +2061,10 @@ export function createGatewayServer(options = {}) {
       const feedbackMatch = /^\/api\/v1\/chats\/([^/]+)\/draft-feedback$/u.exec(url.pathname);
       if (feedbackMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST for draft feedback." });
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         try {
-          return json(response, 201, await userStateStore.recordDraftFeedback(decodeURIComponent(feedbackMatch[1]), await readJSON(request)));
+          return json(response, 201, await store.recordDraftFeedback(decodeURIComponent(feedbackMatch[1]), await readJSON(request)));
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Draft feedback is invalid." });
         }
@@ -1272,6 +2072,8 @@ export function createGatewayServer(options = {}) {
       const outcomeMatch = /^\/api\/v1\/chats\/([^/]+)\/personalization-outcome$/u.exec(url.pathname);
       if (outcomeMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST for a draft outcome." });
+        const caller = callerSession(request);
+        const store = getUserStateStore(caller);
         try {
           const chatId = decodeURIComponent(outcomeMatch[1]);
           const input = await readJSON(request);
@@ -1287,7 +2089,7 @@ export function createGatewayServer(options = {}) {
                 ? { outcome: "dismissed", editRatio: null }
                 : null;
           if (!terminal) return json(response, 400, { error: "Choose a valid final draft outcome." });
-          const saved = await userStateStore.recordPersonalizationOutcome({ ...binding, ...terminal });
+          const saved = await store.recordPersonalizationOutcome({ ...binding, ...terminal });
           draftLearningLedger.delete(binding.draftId);
           return json(response, 201, { outcome: saved.outcome, editRatio: saved.editRatio, contentStored: false });
         } catch (error) {
@@ -1297,11 +2099,18 @@ export function createGatewayServer(options = {}) {
       const taskMatch = /^\/api\/v1\/(tasks|followups)\/([^/]+)$/u.exec(url.pathname);
       if (taskMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to update this item." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const collection = taskMatch[1] === "followups" ? "followUps" : "tasks";
         const taskId = decodeURIComponent(taskMatch[2]);
         const input = await readJSON(request);
         const status = typeof input.status === "string" ? input.status : "";
-        const [current, savedSnapshot] = await Promise.all([workspacePayload(), userStateStore.snapshot()]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        const isSingleTenant = !authEnforced;
+        const [current, savedSnapshot] = await Promise.all([workspacePayload(bridge, store, isSingleTenant), store.snapshot()]);
         const task = current[collection]?.find((item) => item.id === taskId)
           || current.tasks?.find((item) => item.id === taskId)
           || current.followUps?.find((item) => item.id === taskId)
@@ -1309,7 +2118,7 @@ export function createGatewayServer(options = {}) {
         if (!task) return json(response, 404, { error: "This evidence-backed item is no longer current." });
         let saved;
         try {
-          saved = await userStateStore.setTaskStatus(taskId, status, new Date(), { snoozedUntil: input.snoozedUntil });
+          saved = await store.setTaskStatus(taskId, status, new Date(), { snoozedUntil: input.snoozedUntil });
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Task status is invalid." });
         }
@@ -1318,49 +2127,70 @@ export function createGatewayServer(options = {}) {
       const decisionMatch = /^\/api\/v1\/decisions\/([^/]+)$/u.exec(url.pathname);
       if (decisionMatch) {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to update this decision." });
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const decisionId = decodeURIComponent(decisionMatch[1]);
         const input = await readJSON(request);
         const status = typeof input.status === "string" ? input.status : "";
-        const [items, savedSnapshot] = await Promise.all([workspaceItems(), userStateStore.snapshot()]);
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        const isSingleTenant = !authEnforced;
+        const [items, savedSnapshot] = await Promise.all([workspaceItems(bridge, isSingleTenant), store.snapshot()]);
         const knownDecision = buildPendingItems(items).some((item) => item.id === decisionId)
           || Boolean(savedSnapshot.decisions?.[decisionId]);
         if (!knownDecision) return json(response, 404, { error: "This decision is no longer current." });
         try {
-          const saved = await userStateStore.setDecisionStatus(decisionId, status, new Date());
+          const saved = await store.setDecisionStatus(decisionId, status, new Date());
           return json(response, 200, { decisionId, ...saved });
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : "Decision status is invalid." });
         }
       }
       if (url.pathname === "/api/v1/chats") {
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to view conversations.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const collection = url.searchParams.get("collection") ?? "active";
-        if (bridgeSource) return json(response, 200, { collection, chats: await enrichChats(await bridgeSource.listChats(collection)) });
-        return json(response, 200, {
-          collection,
-          chats: await enrichChats(chats.filter((chat) => chat.collection === collection).map(viewOfChat)),
-        });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.listChats(collection), store) });
+        return json(response, 200, { collection, chats: [] });
       }
       if (url.pathname === "/api/v1/connect") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to connect." });
-        if (!bridgeSource) return json(response, 409, { error: "The linked-device bridge is not configured." });
-        return json(response, 202, await bridgeSource.startImport());
+        const caller = callerSession(request);
+        if (authEnforced && !caller.authenticated) {
+          return json(response, 401, { error: "Authentication required to connect WhatsApp.", code: "AUTHENTICATION_REQUIRED" });
+        }
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 409, { error: "The linked-device bridge is not configured." });
+        return json(response, 202, await bridge.startImport());
       }
       if (url.pathname === "/api/v1/search") {
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const collection = url.searchParams.get("collection") === "archived" ? "archived" : "active";
         const query = (url.searchParams.get("q") || "").trim();
         if ([...query].length < 2) return json(response, 400, { error: "Enter at least two characters." });
-        if (bridgeSource) return json(response, 200, { collection, chats: await enrichChats(await bridgeSource.searchChats(collection, query)) });
-        const needle = query.toLocaleLowerCase();
-        const matches = chats.filter((chat) => chat.collection === collection && (
-          chat.title.toLocaleLowerCase().includes(needle)
-          || materializeEvents(chat.id).some((event) => isHumanText(event) && event.text.toLocaleLowerCase().includes(needle))
-        ));
-        return json(response, 200, { collection, chats: await enrichChats(matches.map(viewOfChat)) });
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        const store = getUserStateStore(caller);
+        if (bridge) return json(response, 200, { collection, chats: await enrichChats(await bridge.searchChats(collection, query), store) });
+        return json(response, 200, { collection, chats: [] });
       }
       const chatMatch = /^\/api\/v1\/chats\/([^/]+)\/(messages|latest|draft|send-approval|send)$/u.exec(url.pathname);
       if (chatMatch) {
+        const caller = callerSession(request);
+        if (!caller.authenticated) {
+          return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
+        }
         const chatId = decodeURIComponent(chatMatch[1]);
-        if (bridgeSource) {
+        const bridge = await getBridgeForRequest(request, { spawnIfNeeded: false });
+        if (bridge) {
           if (chatMatch[2] === "send-approval" || chatMatch[2] === "send") {
             if (request.method !== "POST") return json(response, 405, { error: "Use POST for an exact reviewed send." });
             if (securityPolicy.sendBrokerToken && !authorizeSendBroker(request.headers["x-mycrobo-send-broker"], securityPolicy.sendBrokerToken)) {
@@ -1372,18 +2202,18 @@ export function createGatewayServer(options = {}) {
             } catch (error) {
               return json(response, 400, { error: error instanceof Error ? error.message : "Invalid send request." });
             }
-            const [status, bundle] = await Promise.all([bridgeSource.status(), bridgeSource.latest(chatId)]);
+            const [status, bundle] = await Promise.all([bridge.status(), bridge.latest(chatId)]);
             if (!status.connected || !status.sendAvailable) return json(response, 409, { error: "WhatsApp sending is not currently available." });
             const exactLatestSource = bundle.latestSource || bundle.latest;
             if (!bundle.watermark?.verifiedAt || exactLatestSource?.id !== input.targetMessageId) {
               return json(response, 409, { error: "The latest message changed. Review this conversation again before sending." });
             }
             if (chatMatch[2] === "send-approval") {
-              const approval = await bridgeSource.approveSend({ chatId, ...input });
+              const approval = await bridge.approveSend({ chatId, ...input });
               return json(response, 201, { ...approval, recipient: bundle.chat?.title || chatId, targetMessageId: input.targetMessageId });
             }
             if (!input.approvalToken) return json(response, 400, { error: "Approval token is required." });
-            const receipt = await bridgeSource.sendApproved({ chatId, ...input });
+            const receipt = await bridge.sendApproved({ chatId, ...input });
             return json(response, 200, { ...receipt, recipient: bundle.chat?.title || chatId, targetMessageId: input.targetMessageId });
           }
           if (chatMatch[2] === "draft") {
@@ -1398,7 +2228,7 @@ export function createGatewayServer(options = {}) {
             const draftStartedAt = performance.now();
             const input = await readJSON(request);
             const bundleStartedAt = performance.now();
-            const bundle = await bridgeSource.bundle(chatId);
+            const bundle = await bridge.bundle(chatId);
             const bundleMs = elapsedMs(bundleStartedAt);
             if (bundle.readiness?.currentMessage?.state !== "ready" || bundle.readiness?.currentStory?.state !== "ready" || bundle.readiness?.draftAllowed !== true) {
               return json(response, 409, {
@@ -1416,15 +2246,15 @@ export function createGatewayServer(options = {}) {
             }
             const contextInputsStartedAt = performance.now();
             const [conversationState, preferences, chatStyle] = await Promise.all([
-              bridgeSource.conversationState ? bridgeSource.conversationState(chatId) : Promise.resolve(null),
+              bridge.conversationState ? bridge.conversationState(chatId) : Promise.resolve(null),
               userStateStore.preferences(),
               userStateStore.chatStyle(chatId),
             ]);
             const rawToneContext = input.localOnly === true
               ? { events: bundle.events, chats: [bundle.chat], accountScopeId: bundle.accountScopeId, runtimeEvidenceBounded: true }
-              : await (bridgeSource.toneContext
-                ? bridgeSource.toneContext(chatId)
-                : bridgeSource.toneEvents(chatId).then((events) => ({ events, chats: [] })));
+              : await (bridge.toneContext
+                ? bridge.toneContext(chatId)
+                : bridge.toneEvents(chatId).then((events) => ({ events, chats: [] })));
             const toneContext = boundedToneContext(rawToneContext, bundle.chat);
             const learningAccountScopeId = String(toneContext.accountScopeId || bundle.accountScopeId || "").trim();
             if (!learningAccountScopeId) return json(response, 409, {
@@ -1523,7 +2353,7 @@ export function createGatewayServer(options = {}) {
             });
           }
           if (chatMatch[2] === "latest") {
-            const bundle = await bridgeSource.latest(chatId);
+            const bundle = await bridge.latest(chatId);
             return json(response, 200, {
               chatId,
               verifiedAt: bundle.watermark.verifiedAt,
@@ -1535,8 +2365,8 @@ export function createGatewayServer(options = {}) {
             });
           }
           const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit")) || 200));
-          const page = await bridgeSource.messages(chatId, { limit, before: url.searchParams.get("before") || "" });
-          const latestState = await bridgeSource.latest(chatId);
+          const page = await bridge.messages(chatId, { limit, before: url.searchParams.get("before") || "" });
+          const latestState = await bridge.latest(chatId);
           return json(response, 200, {
             chatId,
             watermark: latestState.watermark,
@@ -1548,6 +2378,7 @@ export function createGatewayServer(options = {}) {
             nextBefore: page.nextBefore,
           });
         }
+        return json(response, 404, { error: "Chat not found in your workspace." });
         const chat = chats.find((item) => item.id === chatId);
         if (!chat) return json(response, 404, { error: "Chat not found." });
         if (chatMatch[2] === "send-approval" || chatMatch[2] === "send") {
@@ -1649,22 +2480,97 @@ export function createGatewayServer(options = {}) {
           sendAvailable: false,
         });
       }
-      const assetPath = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-      if (!/^(?:index\.html|app\.js|admin-presentation\.mjs|autonomy-presentation\.mjs|chat-presentation\.mjs|composer-safety\.mjs|media-presentation\.mjs|pairing-presentation\.mjs|pwa-register\.mjs|relay-device\.mjs|relay-protocol\.mjs|web-auth\.mjs|web-auth-contract\.mjs|web-session\.mjs|web-hosted\.mjs|service-worker\.js|manifest\.webmanifest|styles\.css|assets\/(?:mycrobo-(?:logo-master|mark|lockup)-v1\.png|mycrobo-app-v2-(?:192|512)\.png|mycrobo-app-v2\.ico))$/u.test(assetPath)) {
+      const outSiteRoot = join(here, "..", "..", "apps", "public_html", "out");
+      const legacySiteRoot = join(here, "..", "..", "apps", "public_html", "legacy-export");
+      const siteRoot = existsSync(join(outSiteRoot, "index.html")) ? outSiteRoot : legacySiteRoot;
+      const rawPath = url.pathname.replace(/^\/+/u, "");
+      const normalizedPath = rawPath.replace(/\/+$/u, "");
+      const isRscRequest = Boolean(
+        rawPath.endsWith(".rsc") ||
+        url.searchParams.has("_rsc") ||
+        request.headers.accept?.includes("text/x-component")
+      );
+      const cleanPath = normalizedPath.replace(/\.rsc$/u, "");
+      const isPublicSiteRoute = /^(?:product(?:\/why-mycrobo)?|why-mycrobo|vision|contact|control)$/u.test(cleanPath);
+      const isNextAsset = url.pathname.startsWith("/_next/");
+      const isPublicImage = url.pathname.startsWith("/images/");
+      const isPublicRootAsset = /^(?:mycrobo-logo.*\.webp|mycrobo-mark\.(?:png|webp)|mycrobo.*\.png|robots\.txt|sitemap\.xml)$/u.test(normalizedPath);
+
+      const isAppRoute = !isRscRequest && /^(?:app|login)$/u.test(normalizedPath);
+
+      let targetFile = null;
+      if (url.pathname === "/" || normalizedPath === "index.rsc") {
+        if (isRscRequest) {
+          const candidate1 = join(siteRoot, "index.rsc");
+          const candidate2 = join(legacySiteRoot, "index.rsc");
+          targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+        } else {
+          const candidate1 = join(siteRoot, "index.html");
+          const candidate2 = join(legacySiteRoot, "index.html");
+          const candidate3 = join(clientRoot, "index.html");
+          targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : candidate3);
+        }
+      } else if (isAppRoute) {
+        targetFile = join(clientRoot, "index.html");
+      } else if (isPublicSiteRoute) {
+        if (isRscRequest) {
+          const candidate1 = join(siteRoot, `${cleanPath}.rsc`);
+          const candidate2 = join(legacySiteRoot, `${cleanPath}.rsc`);
+          targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+        } else {
+          const candidate1 = join(siteRoot, cleanPath, "index.html");
+          const candidate2 = join(siteRoot, `${cleanPath}.html`);
+          const candidate3 = join(legacySiteRoot, cleanPath, "index.html");
+          const candidate4 = join(legacySiteRoot, `${cleanPath}.html`);
+          targetFile = existsSync(candidate1) ? candidate1 : (existsSync(candidate2) ? candidate2 : (existsSync(candidate3) ? candidate3 : candidate4));
+        }
+      } else if (isNextAsset || isPublicImage || isPublicRootAsset) {
+        const candidate1 = join(siteRoot, rawPath);
+        const candidate2 = join(legacySiteRoot, rawPath);
+        targetFile = existsSync(candidate1) ? candidate1 : candidate2;
+      } else {
+        const assetPath = url.pathname.slice(1);
+        if (!/^(?:index\.html|app\.js|admin-presentation\.mjs|autonomy-presentation\.mjs|chat-presentation\.mjs|composer-safety\.mjs|media-presentation\.mjs|pairing-presentation\.mjs|pwa-register\.mjs|relay-device\.mjs|relay-protocol\.mjs|web-auth\.mjs|web-auth-contract\.mjs|web-session\.mjs|web-hosted\.mjs|service-worker\.js|manifest\.webmanifest|styles\.css|assets\/(?:mycrobo-(?:logo-master|mark|lockup)-v1\.png|mycrobo-app-v2-(?:192|512)\.png|mycrobo-app-v2\.ico)|images\/.*)$/u.test(assetPath)) {
+          return json(response, 404, { error: "Not found." });
+        }
+        targetFile = join(clientRoot, assetPath);
+      }
+
+      let body;
+      try {
+        body = await readFile(targetFile);
+      } catch {
         return json(response, 404, { error: "Not found." });
       }
-      const body = await readFile(join(clientRoot, assetPath));
-      const mime = extname(assetPath) === ".css"
+
+      if (normalizedPath === "login" && targetFile.endsWith("index.html")) {
+        body = Buffer.from(body.toString("utf8").replace('<html lang="en">', '<html lang="en" class="force-auth">'));
+      }
+
+      const ext = extname(targetFile).toLowerCase();
+      const mime = ext === ".rsc" || (isRscRequest && ext !== ".json" && ext !== ".js" && ext !== ".css" && ext !== ".png" && ext !== ".webp" && ext !== ".svg")
+        ? "text/x-component; charset=utf-8"
+        : ext === ".css"
         ? "text/css; charset=utf-8"
-        : extname(assetPath) === ".webmanifest"
+        : ext === ".webmanifest"
           ? "application/manifest+json; charset=utf-8"
-        : [".js", ".mjs"].includes(extname(assetPath))
+        : [".js", ".mjs"].includes(ext)
           ? "text/javascript; charset=utf-8"
-          : extname(assetPath) === ".png"
-            ? "image/png"
-            : extname(assetPath) === ".ico"
-              ? "image/x-icon"
-          : "text/html; charset=utf-8";
+        : ext === ".png"
+          ? "image/png"
+        : ext === ".webp"
+          ? "image/webp"
+        : ext === ".svg"
+          ? "image/svg+xml"
+        : ext === ".ico"
+          ? "image/x-icon"
+        : ext === ".xml"
+          ? "application/xml"
+        : ext === ".json"
+          ? "application/json"
+        : ext === ".txt"
+          ? "text/plain; charset=utf-8"
+        : "text/html; charset=utf-8";
       response.writeHead(200, { "content-type": mime, "cache-control": "no-store" });
       response.end(body);
     } catch (error) {
@@ -1685,6 +2591,7 @@ export function createGatewayServer(options = {}) {
     clearInterval(googleRefreshTimer);
     translator?.close?.();
     autoSendRuntime.close();
+    try { controlPlane?.close(); } catch {}
   });
   return server;
 }
@@ -1702,9 +2609,16 @@ if (isMain) {
     buildVersion: process.env.MYCROBO_BUILD_VERSION,
   });
   const host = process.env.MYCROBO_GATEWAY_HOST || "127.0.0.1";
-  const server = createGatewayServer({
+  const srv = createGatewayServer({
     autoSendHostBootstrap: hostBootstrapResult.accepted ? hostBootstrapResult.bootstrap : null,
-  }).listen(port, host, () => {
+  });
+  srv.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[Gateway] Port ${port} is in use. Exiting.`);
+      process.exit(1);
+    }
+  });
+  const server = srv.listen(port, host, () => {
     process.stdout.write(`MyCrobo local gateway: http://${host}:${port}\n`);
   });
   const desktopParentPID = Number(process.env.MYCROBO_DESKTOP_PARENT_PID || 0);

@@ -1,0 +1,37 @@
+[
+  {
+    "route": "/",
+    "title": "MyCrobo — Stay focused. Stay present.",
+    "description": "MyCrobo is building relationship-aware AI to protect founder focus, handle authorised routine communication and surface what genuinely needs attention."
+  },
+  {
+    "route": "/product/",
+    "title": "Product — MyCrobo",
+    "description": "Explore MyCrobo’s focus-first product direction: authorised routine handling, planned reviews, contextual escalation and founder-controlled communication."
+  },
+  {
+    "route": "/why-mycrobo/",
+    "title": "Why MyCrobo",
+    "description": "Relationship profiles, communication DNA, and 1,500 scenario cells help MyCrobo adapt to the person and the moment."
+  },
+  {
+    "route": "/vision/",
+    "title": "Vision — MyCrobo",
+    "description": "MyCrobo’s focus-first vision: relationship-aware messaging, planned voice capabilities and a permissioned visual digital twin."
+  },
+  {
+    "route": "/contact/",
+    "title": "Contact — MyCrobo",
+    "description": "Contact MyCrobo about founder early access, recurring interruptions, communication workflows, design partnership or the digital-twin vision."
+  },
+  {
+    "route": "/control/",
+    "title": "Personal Autonomy — MyCrobo",
+    "description": "Explore the intended MyCrobo controls for routine handling, review windows, escalation, relationship boundaries, memory and owner approval."
+  },
+  {
+    "route": "/product/why-mycrobo/",
+    "title": "Why MyCrobo",
+    "description": "Relationship profiles, communication DNA, and 1,500 scenario cells help MyCrobo adapt to the person and the moment."
+  }
+]

@@ -29,6 +29,43 @@ function tenantDirectory(root, tenantId, { create = true } = {}) {
   assertSafeComponent(target);
   return target;
 }
+function tenantUserDirectory(root, tenantId, userId, ownerUserId) {
+  if (!/^user-[a-f0-9]{24}$/u.test(String(userId || ""))) throw new Error("The user identifier is invalid.");
+  if (!/^user-[a-f0-9]{24}$/u.test(String(ownerUserId || ""))) throw new Error("The tenant storage owner could not be verified.");
+  const base = tenantDirectory(root, tenantId);
+  const ownerPath = join(base, "tenant-data-owner.json");
+  assertSafeComponent(ownerPath);
+  const expectedOwner = {
+    schema: "mycrobo-tenant-data-owner.1",
+    tenantId,
+    userId: ownerUserId,
+  };
+  if (!existsSync(ownerPath)) {
+    try {
+      writeFileSync(ownerPath, `${JSON.stringify(expectedOwner, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+  }
+  let savedOwner;
+  try { savedOwner = JSON.parse(readFileSync(ownerPath, "utf8")); }
+  catch { throw new Error("The tenant data owner record is damaged; private history remains preserved and locked."); }
+  if (savedOwner?.schema !== expectedOwner.schema
+      || savedOwner.tenantId !== tenantId
+      || savedOwner.userId !== ownerUserId) {
+    throw new Error("The tenant data owner record is invalid; private history remains preserved and locked.");
+  }
+  if (ownerUserId === userId) return base;
+
+  const usersRoot = resolve(base, "users");
+  const target = resolve(usersRoot, userId);
+  if (relative(base, target).replace(/\\/gu, "/") !== `users/${userId}`) throw new Error("The user workspace path escapes tenant storage.");
+  assertSafeComponent(usersRoot);
+  assertSafeComponent(target);
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  assertSafeComponent(target);
+  return target;
+}
 function legacyArtifacts(root) {
   const files = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -100,4 +137,4 @@ function materializeLegacyTenant(root, tenantId) {
   return { directory: destination, journal, copied: artifacts.length, artifacts: artifacts.map(({ relativePath, bytes, sha256: digest }) => ({ relativePath, bytes, sha256: digest })) };
 }
 
-module.exports = { legacyArtifacts, materializeLegacyTenant, tenantDirectory };
+module.exports = { legacyArtifacts, materializeLegacyTenant, tenantDirectory, tenantUserDirectory };

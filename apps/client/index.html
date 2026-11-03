@@ -10,41 +10,81 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/mycrobo-app-v2.ico" />
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      if (window.location.pathname.startsWith('/login') || window.location.hash === '#authOverlay') {
+        document.documentElement.classList.add('force-auth');
+      }
+    </script>
+    <style>
+      /* Instant zero-blink login display: hide app shell immediately */
+      html.force-auth .appShell {
+        display: none !important;
+      }
+      html.force-auth .authOverlay {
+        display: flex !important;
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 999999 !important;
+        min-height: 100vh !important;
+        background: radial-gradient(circle at 10% 5%, #dff4e9 0, transparent 34%), #f5f8f6 !important;
+      }
+      html.force-auth .authOverlay.hidden {
+        display: flex !important;
+      }
+    </style>
   </head>
   <body>
     <a class="skipLink" href="#appContent">Skip to MyCrobo content</a>
     <section class="authOverlay hidden" id="authOverlay" aria-labelledby="authTitle">
-      <div class="authCard">
-        <img src="/assets/mycrobo-lockup-v1.png" alt="MyCrobo" />
-        <p class="eyebrow" id="authEyebrow">Welcome back</p>
-        <h1 id="authTitle">Sign in to MyCrobo</h1>
-        <p class="lede" id="authDescription">Unlock only the workspaces assigned to your account.</p>
+      <header class="site-header">
+        <a class="brand" aria-label="MyCrobo home" href="/">
+          <img alt="MyCrobo" width="172" height="58" src="/images/mycrobo-logo.webp" />
+        </a>
+        <nav id="primary-navigation" aria-label="Primary navigation">
+          <a href="/product/">Product</a>
+          <a href="/why-mycrobo/">Why MyCrobo</a>
+          <a href="/vision/">Vision</a>
+          <a href="/contact/">Contact</a>
+          <a class="mobile-clone-cta" href="/#authOverlay">Sign In &rarr;</a>
+        </nav>
+        <a class="button button-small header-cta" href="/#authOverlay">Sign In &rarr;</a>
+        <button class="menu-button" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="primary-navigation">
+          <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-menu" aria-hidden="true"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg>
+        </button>
+      </header>
+      <div class="authContentWrapper">
+        <div class="authCard">
+          <img src="/assets/mycrobo-lockup-v1.png" alt="MyCrobo" />
+          <p class="eyebrow" id="authEyebrow">Welcome back</p>
+          <h1 id="authTitle">Sign in to MyCrobo</h1>
+          <p class="lede" id="authDescription">Unlock only the workspaces assigned to your account.</p>
 
-        <form id="authForm" autocomplete="on">
-          <div id="bootstrapFields" class="hidden">
-            <label><span>Your name</span><input name="displayName" autocomplete="name" maxlength="80" /></label>
-          </div>
-          <label><span>Email</span><input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required /></label>
-          <label>
-            <span>Password</span>
-            <span class="passwordWrapper">
-              <input name="password" id="passwordInput" type="password" autocomplete="current-password" minlength="12" maxlength="256" required />
-              <button type="button" class="passwordToggle" id="passwordToggle" aria-controls="passwordInput" aria-label="Show password" aria-pressed="false" title="Show password">
-                <svg class="eyeIcon eyeNormal" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/></svg>
-                <svg class="eyeIcon eyeSlash hidden" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                <span id="passwordToggleLabel">Show</span>
-              </button>
-            </span>
-          </label>
-          <button type="submit" id="submitAuth">Sign in</button>
-          <p class="error" id="authError" role="alert"></p>
-          <p class="authSwitch" id="authSwitch">
-            <span id="authSwitchPrompt">Don't have an account?</span>
-            <a href="#" id="toggleAuthMode" class="authSwitchLink" role="button">Sign up</a>
-          </p>
-        </form>
+          <form id="authForm" autocomplete="on">
+            <div id="bootstrapFields" class="hidden">
+              <label><span>Your name</span><input name="displayName" autocomplete="name" maxlength="80" /></label>
+            </div>
+            <label><span>Email</span><input name="email" type="email" autocomplete="username" inputmode="email" maxlength="254" required /></label>
+            <label>
+              <span>Password</span>
+              <span class="passwordWrapper">
+                <input name="password" id="passwordInput" type="password" autocomplete="current-password" minlength="8" maxlength="256" required />
+                <button type="button" class="passwordToggle" id="passwordToggle" aria-controls="passwordInput" aria-label="Show password" aria-pressed="false" title="Show password">
+                  <svg class="eyeIcon eyeNormal" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/></svg>
+                  <svg class="eyeIcon eyeSlash hidden" aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6Z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.7" stroke="currentColor" stroke-width="1.8"/><line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                  <span id="passwordToggleLabel">Show</span>
+                </button>
+              </span>
+            </label>
+            <button type="submit" id="submitAuth">Sign in</button>
+            <p class="error" id="authError" role="alert"></p>
+            <p class="authSwitch" id="authSwitch">
+              <span id="authSwitchPrompt">Don't have an account?</span>
+              <a href="#" id="toggleAuthMode" class="authSwitchLink" role="button">Sign up</a>
+            </p>
+          </form>
 
-        <aside id="authBoundary"><b>Your data stays separated.</b> Signing in selects only workspaces you are allowed to use. It never links WhatsApp or sends a message.</aside>
+          <aside id="authBoundary"><b>Your data stays separated.</b> Signing in selects only workspaces you are allowed to use. It never links WhatsApp or sends a message.</aside>
+        </div>
       </div>
     </section>
     <main class="appShell">
@@ -128,13 +168,13 @@
               <div class="autoReplyBanner" id="autoReplyBanner"><span class="autoReplyBadge off" id="globalAutoReplyBadge">Auto-reply is OFF</span><p class="autoReplyTip" id="autoReplyTip">When OFF, AI prepares drafts for your review only. Turn ON to automatically send replies to incoming messages.</p></div>
             </fieldset>
             <fieldset><legend>Suggested replies</legend>
-              <label><span class="settingCopy"><b>Language</b><small>Match each conversation, or prefer one language for new drafts.</small></span><select name="draftLanguage" aria-label="Language"><option value="match">Match the conversation</option><option>English</option><option>Roman Hindi</option><option>Roman Gujarati</option></select></label>
-              <label><span class="settingCopy"><b>Reply length</b><small>“Match my style” uses person-specific evidence when enough is available, then falls back conservatively.</small></span><select name="replyLength" aria-label="Reply length"><option value="match">Match my style</option><option value="short">Keep it short</option><option value="medium">Allow a little detail</option></select></label>
+              <div class="settingRow"><span class="settingCopy"><b>Language</b><small>Match each conversation, or prefer one language for new drafts.</small></span><select name="draftLanguage" id="draftLanguage" aria-label="Language"><option value="match">Match the conversation</option><option>English</option><option>Roman Hindi</option><option>Roman Gujarati</option></select></div>
+              <div class="settingRow"><span class="settingCopy"><b>Reply length</b><small>“Match my style” uses person-specific evidence when enough is available, then falls back conservatively.</small></span><select name="replyLength" id="replyLength" aria-label="Reply length"><option value="match">Match my style</option><option value="short">Keep it short</option><option value="medium">Allow a little detail</option></select></div>
             </fieldset>
             <fieldset><legend>On this device</legend>
-              <label class="toggleLabel"><span><b>Live updates</b><small>Update the open conversation when WhatsApp reports a change.</small></span><input type="checkbox" name="liveUpdates" aria-label="Live updates" /></label>
-              <label><span class="settingCopy"><b>Layout density</b><small>Compact mode shows more items without changing message text.</small></span><select name="density" aria-label="Layout density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
-              <label><span class="settingCopy"><b>Default delivery policy</b><small>Choose what new conversations inherit. Delivery stays off until consent and every protected execution gate are ready.</small></span><select name="defaultSendingMode" aria-label="Default delivery policy"><option value="never">Never send automatically</option><option value="draft">Draft for my review</option><option value="countdown">Safe countdown</option><option value="safe">Safe automatic delivery</option><option value="custom">Custom policy</option></select></label>
+              <label class="toggleLabel"><span><b>Live updates</b><small>Update the open conversation when WhatsApp reports a change.</small></span><input type="checkbox" name="liveUpdates" id="liveUpdates" aria-label="Live updates" /></label>
+              <div class="settingRow"><span class="settingCopy"><b>Layout density</b><small>Compact mode shows more items without changing message text.</small></span><select name="density" id="density" aria-label="Layout density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+              <div class="settingRow"><span class="settingCopy"><b>Default delivery policy</b><small>Choose what new conversations inherit. Delivery stays off until consent and every protected execution gate are ready.</small></span><select name="defaultSendingMode" id="defaultSendingMode" aria-label="Default delivery policy"><option value="never">Never send automatically</option><option value="draft">Draft for my review</option><option value="countdown">Safe countdown</option><option value="safe">Safe automatic delivery</option><option value="custom">Custom policy</option></select></div>
             </fieldset>
             <section class="truthCard autonomyCard" id="autonomyCard" aria-labelledby="autonomyTitle">
               <div class="truthCardHeader"><span class="storageIcon" aria-hidden="true">◈</span><div><h2 id="autonomyTitle">Automatic delivery consent</h2><p>Policy, consent and protected execution are independent. Saving either preference never by itself starts delivery.</p></div></div>
@@ -177,7 +217,7 @@
         <div class="toastRegion" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
       </section>
     </main>
-    <script type="module" src="/pwa-register.mjs"></script>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/pwa-register.mjs?v=2.1"></script>
+    <script type="module" src="/app.js?v=2.1"></script>
   </body>
 </html>
