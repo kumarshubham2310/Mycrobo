@@ -1380,11 +1380,17 @@ export function createGatewayServer(options = {}) {
     }
   }
 
-  async function connectionPayload() {
-    const [saved, google, runtime] = await Promise.all([
+  async function connectionPayload(req) {
+    let runtime = { connected: false, connectionState: "offline" };
+    try {
+      const bridge = await getBridgeForRequest(req, { spawnIfNeeded: false });
+      if (bridge?.status) {
+        runtime = await bridge.status().catch(() => ({ connected: false, connectionState: "offline" }));
+      }
+    } catch { }
+    const [saved, google] = await Promise.all([
       userStateStore.integrations(),
       typeof googleConnector.status === "function" ? googleConnector.status() : Promise.resolve(null),
-      bridgeSource?.status ? bridgeSource.status().catch(() => ({ connected: false, connectionState: "offline" })) : Promise.resolve({ connected: true, connectionState: "fixture" }),
     ]);
     return integrationStatus({ ...saved, google }, {
       whatsappConnected: runtime.connected === true,
@@ -1580,7 +1586,7 @@ export function createGatewayServer(options = {}) {
       }
       if (url.pathname === "/api/v1/integrations") {
         if (request.method !== "GET") return json(response, 405, { error: "Use GET for connections." });
-        return json(response, 200, await connectionPayload());
+        return json(response, 200, await connectionPayload(request));
       }
       if (url.pathname === "/api/v1/integrations/whatsapp/logout") {
         if (request.method !== "POST") return json(response, 405, { error: "Use POST to log out WhatsApp." });
@@ -1736,7 +1742,7 @@ export function createGatewayServer(options = {}) {
           localAccessControl: process.env.MYCROBO_USER_DATA_DIR ? "owner-only-vault" : "development-directory",
           ordinaryStartupSend: securityPolicy.sendBrokerToken ? "native-confirmation-only" : "development-gateway",
           legacyRecovery: { available: legacy.available, bytes: legacy.bytes, removable: legacy.removable },
-          contextSources: await connectionPayload(),
+          contextSources: await connectionPayload(request),
         });
       }
       if (url.pathname.startsWith("/api/v1/pairing-")) {
