@@ -2609,9 +2609,16 @@ if (isMain) {
     buildVersion: process.env.MYCROBO_BUILD_VERSION,
   });
   const host = process.env.MYCROBO_GATEWAY_HOST || "127.0.0.1";
-  const server = createGatewayServer({
+  const srv = createGatewayServer({
     autoSendHostBootstrap: hostBootstrapResult.accepted ? hostBootstrapResult.bootstrap : null,
-  }).listen(port, host, () => {
+  });
+  srv.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[Gateway] Port ${port} is in use. Exiting.`);
+      process.exit(1);
+    }
+  });
+  const server = srv.listen(port, host, () => {
     process.stdout.write(`MyCrobo local gateway: http://${host}:${port}\n`);
   });
   const desktopParentPID = Number(process.env.MYCROBO_DESKTOP_PARENT_PID || 0);

@@ -474,6 +474,11 @@ for (const [tid, entry] of bridgeChildren) {
 }
 
 const gatewayPort = process.env.MYCROBO_GATEWAY_PORT || "4177";
+if (!isWin) {
+  try {
+    execSync(`fuser -k -9 ${gatewayPort}/tcp 2>/dev/null || true`);
+  } catch { }
+}
 const gatewayEnv = {
   ...process.env,
   ELECTRON_RUN_AS_NODE: "1",
