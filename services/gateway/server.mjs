@@ -785,6 +785,17 @@ export function createGatewayServer(options = {}) {
       const defaultExisting = tenantBridgeRegistry.get(tenantId);
       if (defaultExisting) return defaultExisting;
     }
+    if (tenantBridgeRegistry) {
+      for (const entry of tenantBridgeRegistry._bridges.values()) {
+        if (entry.bridgeSource) return entry.bridgeSource;
+      }
+    }
+    if (spawnIfNeeded && tenantBridgeRegistry) {
+      await new Promise((r) => setTimeout(r, 600));
+      for (const entry of tenantBridgeRegistry._bridges.values()) {
+        if (entry.bridgeSource) return entry.bridgeSource;
+      }
+    }
     return null;
   }
 
@@ -1778,6 +1789,7 @@ export function createGatewayServer(options = {}) {
         const caller = callerSession(request);
         if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 503, { error: "WhatsApp bridge is initializing. Please try again in a moment." });
         if (!bridge?.useQRPairing) return json(response, 404, { error: "QR linking is unavailable in this build." });
         try {
           return json(response, 200, await bridge.useQRPairing());
@@ -1790,6 +1802,7 @@ export function createGatewayServer(options = {}) {
         const caller = callerSession(request);
         if (authEnforced && !caller.authenticated) return json(response, 401, { error: "Authentication required.", code: "AUTHENTICATION_REQUIRED" });
         const bridge = await getBridgeForRequest(request, { spawnIfNeeded: true });
+        if (!bridge) return json(response, 503, { error: "WhatsApp bridge is initializing. Please try again in a moment." });
         if (!bridge?.restartPairing) return json(response, 404, { error: "Pairing recovery is unavailable in this build." });
         try {
           return json(response, 200, await bridge.restartPairing());

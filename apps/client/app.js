@@ -2964,8 +2964,13 @@ if (webSession?.surface === "closed-pilot-web") {
         try {
           await fetchJSON("/api/v1/pairing-use-qr", { method: "POST" });
           await refreshStatus();
-        } catch (error) {
-          showToast(error instanceof Error ? error.message : "Could not reload QR code.");
+        } catch {
+          try {
+            await fetchJSON("/api/v1/connect", { method: "POST" });
+            await refreshStatus({ skipSavedChatProbe: true });
+          } catch (error) {
+            showToast(error instanceof Error ? error.message : "Could not reload QR code.");
+          }
         }
       } finally {
         if (button) {
