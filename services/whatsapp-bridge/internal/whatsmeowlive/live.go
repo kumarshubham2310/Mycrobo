@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -99,6 +100,7 @@ type Live struct {
 	latestQR               PairingSnapshot
 	pairingDeadline        time.Time
 	pairingSequence        uint64
+	pairingCancel          context.CancelFunc
 	state                  string
 	connectionEpoch        string
 	boundAccountID         string
@@ -178,6 +180,12 @@ func open(ctx context.Context, sessionPath string, service *bridge.Service, hexK
 }
 
 func (l *Live) Close() error {
+	l.mu.Lock()
+	if l.pairingCancel != nil {
+		l.pairingCancel()
+		l.pairingCancel = nil
+	}
+	l.mu.Unlock()
 	l.client.Disconnect()
 	return l.container.Close()
 }
@@ -450,6 +458,10 @@ func (l *Live) Logout(ctx context.Context) error {
 		replacement.AddEventHandler(func(raw any) { l.handleClientEvent(replacement, raw) })
 	}
 	l.mu.Lock()
+	if l.pairingCancel != nil {
+		l.pairingCancel()
+		l.pairingCancel = nil
+	}
 	l.client = replacement
 	l.historyPeer = replacement
 	l.pairing = PairingSnapshot{State: "unpaired"}
@@ -556,12 +568,19 @@ func (l *Live) connectClient(ctx context.Context, client *whatsmeow.Client) erro
 
 func (l *Live) connectClientLocked(ctx context.Context, client *whatsmeow.Client) error {
 	if client.Store.ID == nil {
-		qr, err := client.GetQRChannel(ctx)
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
 		l.mu.Lock()
+		if l.pairingCancel != nil {
+			l.pairingCancel()
+			l.pairingCancel = nil
+		}
+		baseCtx := l.runCtx
+		if baseCtx == nil || baseCtx.Err() != nil {
+			baseCtx = context.Background()
+		}
+		pairCtx, pairCancel := context.WithTimeout(baseCtx, pairingSessionLifetime)
+		l.pairingCancel = pairCancel
+
+		now := time.Now().UTC()
 		l.pairingSequence++
 		sequence := l.pairingSequence
 		l.pairingDeadline = now.Add(pairingSessionLifetime)
@@ -569,11 +588,12 @@ func (l *Live) connectClientLocked(ctx context.Context, client *whatsmeow.Client
 		l.latestQR = PairingSnapshot{}
 		l.state = "connecting"
 		l.mu.Unlock()
-		consumerCtx := l.runCtx
-		if consumerCtx == nil || consumerCtx.Err() != nil {
-			consumerCtx = context.Background()
+
+		qr, err := client.GetQRChannel(pairCtx)
+		if err != nil {
+			return err
 		}
-		go l.consumePairing(consumerCtx, qr, sequence)
+		go l.consumePairing(pairCtx, qr, sequence)
 	}
 	if err := client.Connect(); err != nil {
 		l.setState("error")
@@ -591,10 +611,20 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	if client == nil || client.Store == nil || client.Store.ID != nil {
 		return errors.New("a new WhatsApp linking session is unavailable")
 	}
-	// Invalidate the previous consumer before Disconnect can emit its terminal
-	// event. Otherwise an expired channel can overwrite the new pairing state.
-	now := time.Now().UTC()
+
 	l.mu.Lock()
+	if l.pairingCancel != nil {
+		l.pairingCancel()
+		l.pairingCancel = nil
+	}
+	baseCtx := l.runCtx
+	if baseCtx == nil || baseCtx.Err() != nil {
+		baseCtx = context.Background()
+	}
+	pairCtx, pairCancel := context.WithTimeout(baseCtx, pairingSessionLifetime)
+	l.pairingCancel = pairCancel
+
+	now := time.Now().UTC()
 	l.pairingSequence++
 	sequence := l.pairingSequence
 	l.pairingDeadline = now.Add(pairingSessionLifetime)
@@ -602,6 +632,7 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.latestQR = PairingSnapshot{}
 	l.state = "connecting"
 	l.mu.Unlock()
+
 	client.Disconnect()
 	// Do NOT delete the device store or create a new device identity.
 	// Each NewDevice generates a new noise key pair and registers it with
@@ -625,21 +656,18 @@ func (l *Live) restartPairingSession(ctx context.Context) error {
 	l.mu.Unlock()
 	client = replacement
 
-	fetchCtx, fetchCancel := context.WithTimeout(ctx, 3*time.Second)
+	fetchCtx, fetchCancel := context.WithTimeout(baseCtx, 3*time.Second)
 	if latestVer, verErr := whatsmeow.GetLatestVersion(fetchCtx, nil); verErr == nil && latestVer != nil {
 		waStore.SetWAVersion(*latestVer)
+		log.Printf("[LivePairing] Updated WhatsApp web version: %s", latestVer.String())
 	}
 	fetchCancel()
 
-	qr, err := client.GetQRChannel(ctx)
+	qr, err := client.GetQRChannel(pairCtx)
 	if err != nil {
 		return err
 	}
-	consumerCtx := l.runCtx
-	if consumerCtx == nil || consumerCtx.Err() != nil {
-		consumerCtx = context.Background()
-	}
-	go l.consumePairing(consumerCtx, qr, sequence)
+	go l.consumePairing(pairCtx, qr, sequence)
 	if err = client.Connect(); err != nil {
 		return err
 	}
@@ -682,8 +710,10 @@ func (l *Live) consumePairing(ctx context.Context, items <-chan whatsmeow.QRChan
 		select {
 		case item, ok := <-items:
 			if !ok {
+				log.Printf("[LivePairing] seq=%d QR channel closed", sequence)
 				return
 			}
+			log.Printf("[LivePairing] seq=%d event=%q code_len=%d err=%v", sequence, item.Event, len(item.Code), item.Error)
 			snapshot := PairingSnapshot{State: item.Event}
 			if item.Event == "code" {
 				snapshot.State = "scan-required"
@@ -728,6 +758,10 @@ func (l *Live) consumePairing(ctx context.Context, items <-chan whatsmeow.QRChan
 				l.pairing = snapshot
 			}
 			if snapshot.State == "paired" {
+				if l.pairingCancel != nil {
+					l.pairingCancel()
+					l.pairingCancel = nil
+				}
 				l.state = "connecting"
 				client := l.client
 				l.mu.Unlock()
@@ -736,6 +770,7 @@ func (l *Live) consumePairing(ctx context.Context, items <-chan whatsmeow.QRChan
 			}
 			l.mu.Unlock()
 		case <-ctx.Done():
+			log.Printf("[LivePairing] seq=%d context finished: %v", sequence, ctx.Err())
 			return
 		}
 	}

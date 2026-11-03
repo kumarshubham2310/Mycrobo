@@ -176,17 +176,23 @@ func main() {
 			return
 		}
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
+			log.Printf("[LiveBridge] GET /v1/link/qr.png: code not cached (state=%s), calling UseQR...", snapshot.State)
 			if fresh, qrErr := live.UseQR(request.Context()); qrErr == nil && fresh.Code != "" {
 				snapshot = fresh
+				log.Printf("[LiveBridge] UseQR ready: state=%s code_len=%d", snapshot.State, len(snapshot.Code))
+			} else if qrErr != nil {
+				log.Printf("[LiveBridge] UseQR failed: %v", qrErr)
 			}
 		}
 		response.Header().Set("Cache-Control", "no-store")
 		if snapshot.State != "scan-required" || snapshot.Code == "" {
+			log.Printf("[LiveBridge] GET /v1/link/qr.png: returning 404 (state=%s, code_len=%d)", snapshot.State, len(snapshot.Code))
 			http.Error(response, "pairing code is not available", http.StatusNotFound)
 			return
 		}
 		png, encodeErr := qrcode.Encode(snapshot.Code, qrcode.Medium, 320)
 		if encodeErr != nil {
+			log.Printf("[LiveBridge] qrcode.Encode error: %v", encodeErr)
 			http.Error(response, "pairing code could not be rendered", http.StatusInternalServerError)
 			return
 		}
